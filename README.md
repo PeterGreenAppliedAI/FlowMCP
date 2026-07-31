@@ -5,7 +5,7 @@ Most MCP servers wrap an entire platform: every endpoint becomes a tool, the mod
 ## Quickstart (60 seconds)
 
 ```sh
-git clone <this repo> && cd flowmcp
+git clone https://github.com/PeterGreenAppliedAI/FlowMCP.git && cd FlowMCP
 npm install
 npm test          # hermetic — no network needed
 npm start         # serves MCP over stdio
