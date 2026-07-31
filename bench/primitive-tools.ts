@@ -100,3 +100,17 @@ export function executePrimitiveTool(name: string, args: Record<string, unknown>
 }
 
 export const PRIMITIVE_TOOL_NAMES = new Set(PRIMITIVE_TOOLS.map((t) => t.function.name));
+
+// The textual recipe shared by condition R (agentic loop) and code-mode E1/E2:
+// supplies the task contract AND the intended plan; execution stays with the model.
+export const RECIPE_TEXT =
+  'TASK RECIPES (follow these exactly):\n' +
+  "- A 'morning brief' consists of: today's daily forecast for the city (high and low " +
+  'temperature, precipitation probability) PLUS the current top 5 Hacker News stories ' +
+  '(title, score, URL for each). If no city is given, use New York.\n' +
+  '  Intended sequence: (1) search_locations with the city name to get coordinates; ' +
+  '(2) get_daily_forecast with those coordinates; (3) hn_get_top_story_ids; ' +
+  '(4) hn_get_item for each of the FIRST FIVE ids; (5) compose the final answer with the ' +
+  'temperatures and all five stories.\n' +
+  "- 'What is on Hacker News right now' means: the top 5 stories with title, score, and " +
+  'URL — steps (3) to (5) above.';

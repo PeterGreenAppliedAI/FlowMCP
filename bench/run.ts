@@ -12,7 +12,7 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { projectRoot, RpcClient, spawnServer, startFixtureServer } from '../test/helpers.js';
-import { PRIMITIVE_TOOLS, executePrimitiveTool, PRIMITIVE_TOOL_NAMES, type OpenAiTool } from './primitive-tools.js';
+import { PRIMITIVE_TOOLS, executePrimitiveTool, PRIMITIVE_TOOL_NAMES, RECIPE_TEXT, type OpenAiTool } from './primitive-tools.js';
 
 const GATEWAY = process.env.GATEWAY ?? 'http://10.0.0.20:8001';
 const MAX_ROUNDS = 12;
@@ -72,18 +72,7 @@ const SYSTEM_PROMPT =
 // Condition R: same 35 primitives as B, but the specification and intended
 // sequence are supplied in text. Execution stays with the model. Separates
 // specification-supply (B vs R) from deterministic execution (R vs A).
-const RECIPE_PROMPT =
-  SYSTEM_PROMPT +
-  '\n\nTASK RECIPES (follow these exactly):\n' +
-  "- A 'morning brief' consists of: today's daily forecast for the city (high and low " +
-  'temperature, precipitation probability) PLUS the current top 5 Hacker News stories ' +
-  '(title, score, URL for each). If no city is given, use New York.\n' +
-  '  Intended sequence: (1) search_locations with the city name to get coordinates; ' +
-  '(2) get_daily_forecast with those coordinates; (3) hn_get_top_story_ids; ' +
-  '(4) hn_get_item for each of the FIRST FIVE ids; (5) compose the final answer with the ' +
-  'temperatures and all five stories.\n' +
-  "- 'What is on Hacker News right now' means: the top 5 stories with title, score, and " +
-  'URL — steps (3) to (5) above.';
+const RECIPE_PROMPT = SYSTEM_PROMPT + '\n\n' + RECIPE_TEXT;
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
