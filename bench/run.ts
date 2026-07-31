@@ -29,7 +29,7 @@ const DEFAULT_MODELS = [
 
 const STORY_TITLES = ['Story 101', 'Story 102', 'Story 103', 'Story 104', 'Story 105'];
 
-type Condition = 'A' | 'B' | 'C' | 'D';
+type Condition = 'A' | 'B' | 'C' | 'D' | 'R';
 
 interface Task {
   id: string;
@@ -44,9 +44,9 @@ const briefScore = (text: string) =>
 const hnScore = (text: string) => STORY_TITLES.filter((t) => text.includes(t)).length >= 3;
 
 const TASKS: Task[] = [
-  { id: 'brief_city', prompt: 'Give me a morning brief for Lisbon.', expectedFlowTool: 'morning_brief', conditions: ['A', 'B', 'C', 'D'], score: briefScore },
-  { id: 'hn_now', prompt: 'What is on Hacker News right now?', expectedFlowTool: 'hn_top', conditions: ['A', 'B', 'C', 'D'], score: hnScore },
-  { id: 'brief_default', prompt: 'Morning brief, please.', expectedFlowTool: 'morning_brief', conditions: ['A', 'B', 'C', 'D'], score: briefScore },
+  { id: 'brief_city', prompt: 'Give me a morning brief for Lisbon.', expectedFlowTool: 'morning_brief', conditions: ['A', 'B', 'C', 'D', 'R'], score: briefScore },
+  { id: 'hn_now', prompt: 'What is on Hacker News right now?', expectedFlowTool: 'hn_top', conditions: ['A', 'B', 'C', 'D', 'R'], score: hnScore },
+  { id: 'brief_default', prompt: 'Morning brief, please.', expectedFlowTool: 'morning_brief', conditions: ['A', 'B', 'C', 'D', 'R'], score: briefScore },
   // D only: the right answer is a flow PLUS one primitive call.
   {
     id: 'partial_match',
@@ -68,6 +68,22 @@ const TASKS: Task[] = [
 const SYSTEM_PROMPT =
   'You are a helpful assistant with access to tools. Use the tools to get real data — never invent values. ' +
   'When you have what you need, reply with a final text answer that includes the concrete data you retrieved.';
+
+// Condition R: same 35 primitives as B, but the specification and intended
+// sequence are supplied in text. Execution stays with the model. Separates
+// specification-supply (B vs R) from deterministic execution (R vs A).
+const RECIPE_PROMPT =
+  SYSTEM_PROMPT +
+  '\n\nTASK RECIPES (follow these exactly):\n' +
+  "- A 'morning brief' consists of: today's daily forecast for the city (high and low " +
+  'temperature, precipitation probability) PLUS the current top 5 Hacker News stories ' +
+  '(title, score, URL for each). If no city is given, use New York.\n' +
+  '  Intended sequence: (1) search_locations with the city name to get coordinates; ' +
+  '(2) get_daily_forecast with those coordinates; (3) hn_get_top_story_ids; ' +
+  '(4) hn_get_item for each of the FIRST FIVE ids; (5) compose the final answer with the ' +
+  'temperatures and all five stories.\n' +
+  "- 'What is on Hacker News right now' means: the top 5 stories with title, score, and " +
+  'URL — steps (3) to (5) above.';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -146,7 +162,7 @@ async function runOnce(
   flowToolNames: Set<string>,
 ): Promise<RunResult> {
   const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: condition === 'R' ? RECIPE_PROMPT : SYSTEM_PROMPT },
     { role: 'user', content: task.prompt },
   ];
   const started = Date.now();
@@ -331,6 +347,7 @@ async function main() {
     B: { tools: PRIMITIVE_TOOLS, execute: executeB },
     C: { tools: searchTools, execute: executeC },
     D: { tools: mixedTools, execute: executeD },
+    R: { tools: PRIMITIVE_TOOLS, execute: executeB },
   };
 
   const results: RunResult[] = [];
