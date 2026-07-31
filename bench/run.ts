@@ -29,10 +29,13 @@ const DEFAULT_MODELS = [
 
 const STORY_TITLES = ['Story 101', 'Story 102', 'Story 103', 'Story 104', 'Story 105'];
 
+type Condition = 'A' | 'B' | 'C' | 'D';
+
 interface Task {
   id: string;
   prompt: string;
-  expectedFlowTool: string; // ground truth for condition A tool selection
+  expectedFlowTool: string | null; // ground truth for façade tool selection (null: no flow applies)
+  conditions: Condition[];
   score: (finalText: string) => boolean;
 }
 
@@ -41,9 +44,25 @@ const briefScore = (text: string) =>
 const hnScore = (text: string) => STORY_TITLES.filter((t) => text.includes(t)).length >= 3;
 
 const TASKS: Task[] = [
-  { id: 'brief_city', prompt: 'Give me a morning brief for Lisbon.', expectedFlowTool: 'morning_brief', score: briefScore },
-  { id: 'hn_now', prompt: 'What is on Hacker News right now?', expectedFlowTool: 'hn_top', score: hnScore },
-  { id: 'brief_default', prompt: 'Morning brief, please.', expectedFlowTool: 'morning_brief', score: briefScore },
+  { id: 'brief_city', prompt: 'Give me a morning brief for Lisbon.', expectedFlowTool: 'morning_brief', conditions: ['A', 'B', 'C', 'D'], score: briefScore },
+  { id: 'hn_now', prompt: 'What is on Hacker News right now?', expectedFlowTool: 'hn_top', conditions: ['A', 'B', 'C', 'D'], score: hnScore },
+  { id: 'brief_default', prompt: 'Morning brief, please.', expectedFlowTool: 'morning_brief', conditions: ['A', 'B', 'C', 'D'], score: briefScore },
+  // D only: the right answer is a flow PLUS one primitive call.
+  {
+    id: 'partial_match',
+    prompt: 'Give me a morning brief for Lisbon, and include the current EUR to USD exchange rate.',
+    expectedFlowTool: 'morning_brief',
+    conditions: ['D'],
+    score: (text) => briefScore(text) && text.includes('1.0842'),
+  },
+  // D only: no flow applies — the model must decline the façade and use a primitive.
+  {
+    id: 'decline',
+    prompt: 'What is the current moon phase?',
+    expectedFlowTool: null,
+    conditions: ['D'],
+    score: (text) => text.toLowerCase().includes('waxing gibbous'),
+  },
 ];
 
 const SYSTEM_PROMPT =
@@ -65,18 +84,27 @@ interface ToolCall {
 
 interface RunResult {
   model: string;
-  condition: 'A' | 'B';
+  condition: Condition;
   task: string;
   trial: number;
   success: boolean;
-  rightFirstTool: boolean | null; // condition A only
+  rightFirstTool: boolean | null; // façade conditions only
   rounds: number;
   toolCalls: number;
   badCalls: number; // unknown tool or malformed arguments
+  usedTools: string[];
   promptTokens: number;
   completionTokens: number;
   ms: number;
   note: string;
+}
+
+interface Transcript {
+  model: string;
+  condition: Condition;
+  task: string;
+  trial: number;
+  messages: ChatMessage[];
 }
 
 // Optional per-request generation cap (--max-tokens N): bounds runaway
@@ -109,11 +137,13 @@ type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<{ t
 
 async function runOnce(
   model: string,
-  condition: 'A' | 'B',
+  condition: Condition,
   task: Task,
   trial: number,
   tools: OpenAiTool[],
   execute: ToolExecutor,
+  transcripts: Transcript[],
+  flowToolNames: Set<string>,
 ): Promise<RunResult> {
   const messages: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -125,7 +155,9 @@ async function runOnce(
   let badCalls = 0;
   let promptTokens = 0;
   let completionTokens = 0;
-  let rightFirstTool: boolean | null = condition === 'A' ? false : null;
+  const facade = condition === 'A' || condition === 'D';
+  let rightFirstTool: boolean | null = facade && task.expectedFlowTool !== null ? false : null;
+  const usedTools: string[] = [];
   let finalText = '';
   let note = '';
 
@@ -141,12 +173,13 @@ async function runOnce(
         finalText = msg.content ?? '';
         break;
       }
-      if (condition === 'A' && toolCalls === 0 && calls[0]) {
+      if (facade && task.expectedFlowTool !== null && toolCalls === 0 && calls[0]) {
         rightFirstTool = calls[0].function.name === task.expectedFlowTool;
       }
       messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: calls });
       for (const call of calls) {
         toolCalls++;
+        usedTools.push(call.function.name);
         let args: Record<string, unknown> = {};
         let bad = false;
         try {
@@ -167,6 +200,11 @@ async function runOnce(
     note = `error: ${e instanceof Error ? e.message : e}`.slice(0, 120);
   }
 
+  // decline task: calling any flow tool is a façade misuse worth flagging.
+  if (task.expectedFlowTool === null && usedTools.some((t) => flowToolNames.has(t))) {
+    note = (note ? note + '; ' : '') + 'façade misuse: called a flow on a no-flow task';
+  }
+  transcripts.push({ model, condition, task: task.id, trial, messages });
   return {
     model,
     condition,
@@ -177,6 +215,7 @@ async function runOnce(
     rounds,
     toolCalls,
     badCalls,
+    usedTools,
     promptTokens,
     completionTokens,
     ms: Date.now() - started,
@@ -193,8 +232,8 @@ async function main() {
   const models = parseListArg('--models') ?? DEFAULT_MODELS;
   const trials = Number(parseListArg('--trials')?.[0] ?? 2);
   const taskIds = parseListArg('--tasks');
-  const conditions = (parseListArg('--conditions') ?? ['A', 'B']) as Array<'A' | 'B'>;
-  const tasks = taskIds ? TASKS.filter((t) => taskIds.includes(t.id)) : TASKS;
+  const conditions = (parseListArg('--conditions') ?? ['A', 'B']) as Condition[];
+  const allTasks = taskIds ? TASKS.filter((t) => taskIds.includes(t.id)) : TASKS;
 
   // Condition A backend: real FlowMCP serving bench/flows (exactly the 2-tool
   // façade), grounded in the same fixture HTTP server as condition B's mocks.
@@ -230,8 +269,74 @@ async function main() {
     return { text: executePrimitiveTool(name, args), bad: false };
   };
 
+  // Condition C: tool-search — the surface is two meta-tools; definitions load on demand.
+  const searchTools: OpenAiTool[] = [
+    {
+      type: 'function',
+      function: {
+        name: 'search_tools',
+        description: 'Search the tool catalog by keywords. Returns matching tool definitions you can then invoke with call_tool.',
+        parameters: { type: 'object', properties: { query: { type: 'string', description: 'Keywords to search for' } }, required: ['query'] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'call_tool',
+        description: 'Invoke a tool from the catalog by name, with its arguments. Find tools first with search_tools.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Tool name from search results' },
+            arguments: { type: 'object', description: 'Arguments for the tool' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+  ];
+
+  const executeC: ToolExecutor = async (name, args) => {
+    if (name === 'search_tools') {
+      const words = String(args.query ?? '').toLowerCase().split(/\W+/).filter(Boolean);
+      const scored = PRIMITIVE_TOOLS.map((t) => {
+        const hay = `${t.function.name} ${t.function.description}`.toLowerCase();
+        return { t, score: words.filter((w) => hay.includes(w)).length };
+      })
+        .filter((s) => s.score > 0)
+        .sort((x, y) => y.score - x.score)
+        .slice(0, 5)
+        .map((s) => s.t.function);
+      return { text: JSON.stringify({ matches: scored }), bad: false };
+    }
+    if (name === 'call_tool') {
+      const toolName = String(args.name ?? '');
+      if (!PRIMITIVE_TOOL_NAMES.has(toolName)) {
+        return { text: `ERROR: no tool named '${toolName}' — use search_tools first`, bad: true };
+      }
+      return { text: executePrimitiveTool(toolName, (args.arguments ?? {}) as Record<string, unknown>), bad: false };
+    }
+    return { text: `ERROR: unknown tool '${name}'`, bad: true };
+  };
+
+  // Condition D: the mixed surface — flows and primitives side by side.
+  const mixedTools: OpenAiTool[] = [...flowTools, ...PRIMITIVE_TOOLS];
+  const executeD: ToolExecutor = async (name, args) => {
+    if (flowToolNames.has(name)) return executeA(name, args);
+    return executeB(name, args);
+  };
+
+  const surfaces: Record<Condition, { tools: OpenAiTool[]; execute: ToolExecutor }> = {
+    A: { tools: flowTools, execute: executeA },
+    B: { tools: PRIMITIVE_TOOLS, execute: executeB },
+    C: { tools: searchTools, execute: executeC },
+    D: { tools: mixedTools, execute: executeD },
+  };
+
   const results: RunResult[] = [];
-  const total = models.length * conditions.length * tasks.length * trials;
+  const transcripts: Transcript[] = [];
+  const total = models.length * conditions.reduce(
+    (sum, c) => sum + allTasks.filter((t) => t.conditions.includes(c)).length * trials, 0);
   let done = 0;
   for (const model of models) {
     // Warm the model first — cold-loading a large model must not eat a trial's timeout.
@@ -246,11 +351,10 @@ async function main() {
       console.error(`warmup failed for ${model}: ${e instanceof Error ? e.message : e}`);
     }
     for (const condition of conditions) {
-      const tools = condition === 'A' ? flowTools : PRIMITIVE_TOOLS;
-      const execute = condition === 'A' ? executeA : executeB;
-      for (const task of tasks) {
+      const { tools, execute } = surfaces[condition];
+      for (const task of allTasks.filter((t) => t.conditions.includes(condition))) {
         for (let trial = 1; trial <= trials; trial++) {
-          const r = await runOnce(model, condition, task, trial, tools, execute);
+          const r = await runOnce(model, condition, task, trial, tools, execute, transcripts, flowToolNames);
           results.push(r);
           done++;
           console.error(
@@ -267,7 +371,9 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const outPath = join(projectRoot, `bench/results/results-${stamp}.json`);
   await writeFile(outPath, JSON.stringify(results, null, 2));
-  console.error(`\nwrote ${outPath}\n`);
+  const transcriptPath = join(projectRoot, `bench/results/transcripts-${stamp}.json`);
+  await writeFile(transcriptPath, JSON.stringify(transcripts, null, 2));
+  console.error(`\nwrote ${outPath}\nwrote ${transcriptPath}\n`);
 
   // Summary table: per model × condition, aggregated over tasks and trials.
   const rows: string[] = ['| model | cond | success | right tool | avg calls | avg tokens | avg s |', '|---|---|---|---|---|---|---|'];
@@ -277,7 +383,10 @@ async function main() {
       if (!rs.length) continue;
       const pct = (n: number) => `${Math.round((n / rs.length) * 100)}%`;
       const avg = (f: (r: RunResult) => number) => (rs.reduce((s, r) => s + f(r), 0) / rs.length).toFixed(1);
-      const right = condition === 'A' ? pct(rs.filter((r) => r.rightFirstTool).length) : '—';
+      const scored = rs.filter((r) => r.rightFirstTool !== null);
+      const right = scored.length
+        ? `${Math.round((scored.filter((r) => r.rightFirstTool).length / scored.length) * 100)}%`
+        : '—';
       rows.push(
         `| ${model} | ${condition} | ${pct(rs.filter((r) => r.success).length)} | ${right} | ${avg((r) => r.toolCalls)} | ${avg((r) => r.promptTokens + r.completionTokens)} | ${avg((r) => r.ms / 1000)} |`,
       );

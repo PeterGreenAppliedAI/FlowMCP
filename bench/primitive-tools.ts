@@ -89,6 +89,10 @@ export function executePrimitiveTool(name: string, args: Record<string, unknown>
       return JSON.stringify({ timezone: 'Etc/UTC' });
     case 'geocode_reverse':
       return JSON.stringify({ name: 'Testville', country: 'Testland' });
+    case 'get_exchange_rate':
+      return JSON.stringify({ base: String(args.base ?? 'EUR'), quote: String(args.quote ?? 'USD'), rate: 1.0842 });
+    case 'get_moon_phase':
+      return JSON.stringify({ phase: 'waxing gibbous', illumination: 0.82 });
     default:
       // Plausible-but-useless responses for the noise tools.
       return JSON.stringify({ ok: true, note: `${name} returned no relevant data` });
