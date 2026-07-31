@@ -1,0 +1,213 @@
+{
+ "variant": 1,
+ "result": "[{\"id\":901,\"title\":\"Item 901\",\"score\":901,\"url\":\"https://example.com/901\"},{\"id\":902,\"title\":\"Item 902\",\"score\":902,\"url\":\"https://example.com/902\"},{\"id\":903,\"title\":\"Item 903\",\"score\":903,\"url\":\"https://example.com/903\"},{\"id\":904,\"title\":\"Item 904\",\"score\":904,\"url\":\"https://example.com/904\"},{\"id\":905,\"title\":\"Item 905\",\"score\":905,\"url\":\"https://example.com/905\"}]",
+ "trace": [
+  {
+   "seq": 0,
+   "name": "hn_get_top_story_ids",
+   "args": {},
+   "result": [
+    901,
+    902,
+    903,
+    904,
+    905,
+    906,
+    907
+   ]
+  },
+  {
+   "seq": 1,
+   "name": "hn_get_new_story_ids",
+   "args": {},
+   "result": [
+    901,
+    902,
+    903
+   ]
+  },
+  {
+   "seq": 2,
+   "name": "hn_get_best_story_ids",
+   "args": {},
+   "result": [
+    901,
+    902,
+    903,
+    904,
+    905,
+    906,
+    907
+   ]
+  },
+  {
+   "seq": 3,
+   "name": "hn_get_item",
+   "args": {
+    "id": 901
+   },
+   "result": {
+    "id": 901,
+    "title": "Item 901",
+    "score": 901,
+    "url": "https://example.com/901"
+   }
+  },
+  {
+   "seq": 4,
+   "name": "hn_get_item",
+   "args": {
+    "id": 902
+   },
+   "result": {
+    "id": 902,
+    "title": "Item 902",
+    "score": 902,
+    "url": "https://example.com/902"
+   }
+  },
+  {
+   "seq": 5,
+   "name": "hn_get_item",
+   "args": {
+    "id": 903
+   },
+   "result": {
+    "id": 903,
+    "title": "Item 903",
+    "score": 903,
+    "url": "https://example.com/903"
+   }
+  },
+  {
+   "seq": 6,
+   "name": "hn_get_item",
+   "args": {
+    "id": 904
+   },
+   "result": {
+    "id": 904,
+    "title": "Item 904",
+    "score": 904,
+    "url": "https://example.com/904"
+   }
+  },
+  {
+   "seq": 7,
+   "name": "hn_get_item",
+   "args": {
+    "id": 905
+   },
+   "result": {
+    "id": 905,
+    "title": "Item 905",
+    "score": 905,
+    "url": "https://example.com/905"
+   }
+  },
+  {
+   "seq": 8,
+   "name": "hn_get_item",
+   "args": {
+    "id": 901
+   },
+   "result": {
+    "id": 901,
+    "title": "Item 901",
+    "score": 901,
+    "url": "https://example.com/901"
+   }
+  },
+  {
+   "seq": 9,
+   "name": "hn_get_item",
+   "args": {
+    "id": 902
+   },
+   "result": {
+    "id": 902,
+    "title": "Item 902",
+    "score": 902,
+    "url": "https://example.com/902"
+   }
+  },
+  {
+   "seq": 10,
+   "name": "hn_get_item",
+   "args": {
+    "id": 903
+   },
+   "result": {
+    "id": 903,
+    "title": "Item 903",
+    "score": 903,
+    "url": "https://example.com/903"
+   }
+  },
+  {
+   "seq": 11,
+   "name": "hn_get_item",
+   "args": {
+    "id": 901
+   },
+   "result": {
+    "id": 901,
+    "title": "Item 901",
+    "score": 901,
+    "url": "https://example.com/901"
+   }
+  },
+  {
+   "seq": 12,
+   "name": "hn_get_item",
+   "args": {
+    "id": 902
+   },
+   "result": {
+    "id": 902,
+    "title": "Item 902",
+    "score": 902,
+    "url": "https://example.com/902"
+   }
+  },
+  {
+   "seq": 13,
+   "name": "hn_get_item",
+   "args": {
+    "id": 903
+   },
+   "result": {
+    "id": 903,
+    "title": "Item 903",
+    "score": 903,
+    "url": "https://example.com/903"
+   }
+  },
+  {
+   "seq": 14,
+   "name": "hn_get_item",
+   "args": {
+    "id": 904
+   },
+   "result": {
+    "id": 904,
+    "title": "Item 904",
+    "score": 904,
+    "url": "https://example.com/904"
+   }
+  },
+  {
+   "seq": 15,
+   "name": "hn_get_item",
+   "args": {
+    "id": 905
+   },
+   "result": {
+    "id": 905,
+    "title": "Item 905",
+    "score": 905,
+    "url": "https://example.com/905"
+   }
+  }
+ ]
+}

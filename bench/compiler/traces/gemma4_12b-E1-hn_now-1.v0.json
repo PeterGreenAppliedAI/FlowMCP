@@ -1,0 +1,85 @@
+{
+ "variant": 0,
+ "result": "Story 1: Story 101 (Score: 101, URL: https://example.com/101)\nStory 2: Story 102 (Score: 102, URL: https://example.com/102)\nStory 3: Story 103 (Score: 103, URL: https://example.com/103)\nStory 4: Story 104 (Score: 104, URL: https://example.com/104)\nStory 5: Story 105 (Score: 105, URL: https://example.com/105)\n",
+ "trace": [
+  {
+   "seq": 0,
+   "name": "hn_get_top_story_ids",
+   "args": {},
+   "result": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107
+   ]
+  },
+  {
+   "seq": 1,
+   "name": "hn_get_item",
+   "args": {
+    "id": 101
+   },
+   "result": {
+    "id": 101,
+    "title": "Story 101",
+    "score": 101,
+    "url": "https://example.com/101"
+   }
+  },
+  {
+   "seq": 2,
+   "name": "hn_get_item",
+   "args": {
+    "id": 102
+   },
+   "result": {
+    "id": 102,
+    "title": "Story 102",
+    "score": 102,
+    "url": "https://example.com/102"
+   }
+  },
+  {
+   "seq": 3,
+   "name": "hn_get_item",
+   "args": {
+    "id": 103
+   },
+   "result": {
+    "id": 103,
+    "title": "Story 103",
+    "score": 103,
+    "url": "https://example.com/103"
+   }
+  },
+  {
+   "seq": 4,
+   "name": "hn_get_item",
+   "args": {
+    "id": 104
+   },
+   "result": {
+    "id": 104,
+    "title": "Story 104",
+    "score": 104,
+    "url": "https://example.com/104"
+   }
+  },
+  {
+   "seq": 5,
+   "name": "hn_get_item",
+   "args": {
+    "id": 105
+   },
+   "result": {
+    "id": 105,
+    "title": "Story 105",
+    "score": 105,
+    "url": "https://example.com/105"
+   }
+  }
+ ]
+}

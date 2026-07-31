@@ -1,0 +1,136 @@
+{
+ "variant": 1,
+ "result": "☀️ Morning Brief – New York\n\n🌡️ Current temperature: 6.6000000000000005°C, partly cloudy\n📈 Today: max 11.3°C, min 2.9°C, precipitation probability 80%\n\n📰 Top Hacker News stories:\n- Item 901 (score: 901)\n- Item 902 (score: 902)\n- Item 903 (score: 903)\n- Item 904 (score: 904)\n- Item 905 (score: 905)",
+ "trace": [
+  {
+   "seq": 0,
+   "name": "search_locations",
+   "args": {
+    "query": "New York"
+   },
+   "result": {
+    "results": [
+     {
+      "name": "New York",
+      "country": "Altland",
+      "latitude": 44.25,
+      "longitude": -63.75
+     }
+    ]
+   }
+  },
+  {
+   "seq": 1,
+   "name": "get_current_weather",
+   "args": {
+    "latitude": 44.25,
+    "longitude": -63.75
+   },
+   "result": {
+    "temperature": 6.6000000000000005,
+    "weather": "partly cloudy"
+   }
+  },
+  {
+   "seq": 2,
+   "name": "get_daily_forecast",
+   "args": {
+    "latitude": 44.25,
+    "longitude": -63.75,
+    "days": 1
+   },
+   "result": {
+    "daily": {
+     "temperature_2m_max": [
+      11.3
+     ],
+     "temperature_2m_min": [
+      2.9
+     ],
+     "precipitation_probability_max": [
+      80
+     ]
+    }
+   }
+  },
+  {
+   "seq": 3,
+   "name": "hn_get_top_story_ids",
+   "args": {},
+   "result": [
+    901,
+    902,
+    903,
+    904,
+    905,
+    906,
+    907
+   ]
+  },
+  {
+   "seq": 4,
+   "name": "hn_get_item",
+   "args": {
+    "id": 901
+   },
+   "result": {
+    "id": 901,
+    "title": "Item 901",
+    "score": 901,
+    "url": "https://example.com/901"
+   }
+  },
+  {
+   "seq": 5,
+   "name": "hn_get_item",
+   "args": {
+    "id": 902
+   },
+   "result": {
+    "id": 902,
+    "title": "Item 902",
+    "score": 902,
+    "url": "https://example.com/902"
+   }
+  },
+  {
+   "seq": 6,
+   "name": "hn_get_item",
+   "args": {
+    "id": 903
+   },
+   "result": {
+    "id": 903,
+    "title": "Item 903",
+    "score": 903,
+    "url": "https://example.com/903"
+   }
+  },
+  {
+   "seq": 7,
+   "name": "hn_get_item",
+   "args": {
+    "id": 904
+   },
+   "result": {
+    "id": 904,
+    "title": "Item 904",
+    "score": 904,
+    "url": "https://example.com/904"
+   }
+  },
+  {
+   "seq": 8,
+   "name": "hn_get_item",
+   "args": {
+    "id": 905
+   },
+   "result": {
+    "id": 905,
+    "title": "Item 905",
+    "score": 905,
+    "url": "https://example.com/905"
+   }
+  }
+ ]
+}
