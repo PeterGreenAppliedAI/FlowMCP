@@ -75,6 +75,36 @@ describe('MCP protocol over stdio', () => {
     expect(result.content[0].text).toContain('New York, Testland');
   });
 
+  it('percent-encodes & in parameter values instead of breaking the query string', async () => {
+    const res = await client.request('tools/call', {
+      name: 'morning_brief',
+      arguments: { city: 'Springfield & Shelbyville' },
+    });
+    const result = res.result as { content: [{ text: string }]; isError?: boolean };
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('Springfield & Shelbyville, Testland');
+  });
+
+  // Regression: the server used to exit the moment stdin closed, killing
+  // in-flight tools/call work — piped batch input hit it, the open-pipe
+  // tests above never did. See DECISIONS.md (2026-07-31).
+  it('drains in-flight requests when stdin closes (piped batch input)', async () => {
+    const child = spawnServer(flowsDir, { FIXTURE_BASE: fixtures.baseUrl });
+    let out = '';
+    child.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()));
+    const batch = [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'morning_brief' } },
+    ]
+      .map((m) => JSON.stringify(m))
+      .join('\n');
+    child.stdin.end(batch + '\n');
+    const code = await new Promise<number | null>((resolve) => child.on('exit', resolve));
+    expect(code).toBe(0);
+    const replies = out.trim().split('\n').map((l) => JSON.parse(l) as { id: number; result?: unknown });
+    expect(replies.find((r) => r.id === 2)?.result).toBeDefined();
+  });
+
   it('returns a structured isError result when a step fails', async () => {
     const res = await client.request('tools/call', { name: 'always_fails', arguments: {} });
     const result = res.result as { content: [{ text: string }]; isError?: boolean };

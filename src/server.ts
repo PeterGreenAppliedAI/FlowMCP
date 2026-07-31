@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // FlowMCP — workflow-first MCP server over stdio.
 // stdout is the protocol channel; all logging goes to stderr.
 

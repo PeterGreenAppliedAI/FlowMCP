@@ -1,5 +1,5 @@
 import { evalExpr, type ExprContext } from './expr.js';
-import { interpolate, interpolateDeep, stringify } from './interpolate.js';
+import { interpolate, interpolateDeep, interpolateUrl, stringify } from './interpolate.js';
 import type { Flow, HttpStep, LeafStep, Step } from './flow-schema.js';
 
 const FLOW_TIMEOUT_MS = 60_000;
@@ -99,8 +99,8 @@ async function runStep(
 }
 
 async function runHttp(step: HttpStep, ctx: FlowContext, deadline: number): Promise<unknown> {
-  // new URL() validates and percent-encodes stray spaces from interpolated values.
-  const url = new URL(interpolate(step.url, ctx)).toString();
+  // Interpolated values are percent-encoded (see interpolateUrl); new URL() validates.
+  const url = new URL(interpolateUrl(step.url, ctx)).toString();
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(step.headers ?? {})) headers[k] = interpolate(v, ctx);
   let body: string | undefined;

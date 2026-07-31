@@ -68,7 +68,11 @@ Everything downstream of a step sees `input.*`, `env.*` (for `{{env.API_KEY}}` �
 
 ### Writing your own flow
 
-Drop a file in `flows/`, restart the server — that's the whole workflow:
+Drop a file in a flows directory, restart the server — that's the whole workflow. The server reads `flows/` in the repo by default; point it anywhere with `--flows` (or the `FLOWMCP_FLOWS_DIR` env var), which is how you keep private flows out of a public checkout:
+
+```sh
+npm start -- --flows ~/my-flows
+```
 
 ```json5
 // flows/cat_fact.flow.json5
@@ -104,6 +108,9 @@ Drop a file in `flows/`, restart the server — that's the whole workflow:
 ```sh
 npm test            # vitest: spawns the real server, speaks JSON-RPC, mocks only outbound HTTP
 npm run typecheck   # strict TS, no emit
+npm run build       # emits dist/ — the `flowmcp` bin entry points there
 ```
+
+CI runs typecheck + tests on Node 20 and 22 for every push. Engineering log — what worked, what didn't, what the fix was — lives in [DECISIONS.md](DECISIONS.md).
 
 MIT license.

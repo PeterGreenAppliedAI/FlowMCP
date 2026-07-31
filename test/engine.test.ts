@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { evalExpr, ExprError } from '../src/expr.js';
-import { interpolate, stringify } from '../src/interpolate.js';
+import { interpolate, interpolateUrl, stringify } from '../src/interpolate.js';
 import { executeFlow, FlowError } from '../src/engine.js';
 import { flowSchema, type Flow } from '../src/flow-schema.js';
 
@@ -79,6 +79,22 @@ describe('interpolate', () => {
 
   it('stringifies objects as JSON', () => {
     expect(stringify({ a: 1 })).toBe('{"a":1}');
+  });
+});
+
+describe('interpolateUrl', () => {
+  const urlCtx = { input: { q: 'Foo & Bar?' }, env: { BASE: 'http://x.test' }, steps: {} };
+
+  it('percent-encodes interpolated values so & cannot break the query', () => {
+    expect(interpolateUrl('http://x.test/search?q={{input.q}}&count=1', urlCtx)).toBe(
+      'http://x.test/search?q=Foo%20%26%20Bar%3F&count=1',
+    );
+  });
+
+  it('leaves a position-0 placeholder raw (the base-URL slot)', () => {
+    expect(interpolateUrl('{{env.BASE}}/search?q={{input.q}}', urlCtx)).toBe(
+      'http://x.test/search?q=Foo%20%26%20Bar%3F',
+    );
   });
 });
 

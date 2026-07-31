@@ -3,11 +3,22 @@
   "version": "0.1.0",
   "description": "Workflow-first MCP server: each tool is one deterministic workflow",
   "type": "module",
+  "bin": {
+    "flowmcp": "dist/server.js"
+  },
+  "files": [
+    "dist",
+    "flows",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=20.10"
   },
   "scripts": {
     "start": "tsx src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
