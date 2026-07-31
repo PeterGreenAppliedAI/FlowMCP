@@ -19,6 +19,9 @@ export interface EngineOptions {
   env?: Record<string, string | undefined>;
   flowTimeoutMs?: number;
   mcp?: McpPool;
+  // Top-level step ids that perform writes: execution pauses before the first
+  // one and returns a pending result for the approval round-trip.
+  writeGate?: Set<string>;
 }
 
 interface FlowContext extends ExprContext {
@@ -27,11 +30,20 @@ interface FlowContext extends ExprContext {
   steps: Record<string, unknown>;
 }
 
+export interface PendingFlow {
+  ctx: FlowContext;
+  stepIndex: number;
+}
+
+export type FlowRun =
+  | { status: 'complete'; text: string }
+  | { status: 'pending'; pending: PendingFlow; proposalText: string };
+
 export async function executeFlow(
   flow: Flow,
   args: Record<string, unknown>,
   opts: EngineOptions = {},
-): Promise<string> {
+): Promise<FlowRun> {
   // Flows see only the env vars they declared — never all of process.env.
   const envSource = opts.env ?? process.env;
   const env: Record<string, string | undefined> = {};
@@ -41,12 +53,48 @@ export async function executeFlow(
     env,
     steps: {},
   };
+  return runSteps(flow, ctx, 0, opts, opts.writeGate);
+}
+
+// Approval resume: run the remaining steps with a fresh deadline (the wait for
+// human approval must not consume the flow's execution budget) and no gate.
+export async function resumeFlow(
+  flow: Flow,
+  pending: PendingFlow,
+  opts: EngineOptions = {},
+): Promise<FlowRun> {
+  return runSteps(flow, pending.ctx, pending.stepIndex, opts, undefined);
+}
+
+async function runSteps(
+  flow: Flow,
+  ctx: FlowContext,
+  startIndex: number,
+  opts: EngineOptions,
+  gate: Set<string> | undefined,
+): Promise<FlowRun> {
   const deadline = Date.now() + (opts.flowTimeoutMs ?? FLOW_TIMEOUT_MS);
-  for (const step of flow.steps) {
+  for (let i = startIndex; i < flow.steps.length; i++) {
+    const step = flow.steps[i]!;
+    if (gate?.has(step.id)) {
+      let proposalText: string;
+      try {
+        proposalText = flow.proposal
+          ? interpolate(flow.proposal, ctx)
+          : `Flow '${flow.name}' is about to execute write step(s): ${flow.steps
+              .slice(i)
+              .filter((s) => gate.has(s.id))
+              .map((s) => `'${s.id}'`)
+              .join(', ')}.`;
+      } catch (e) {
+        throw new FlowError('proposal', errMessage(e));
+      }
+      return { status: 'pending', pending: { ctx, stepIndex: i }, proposalText };
+    }
     ctx.steps[step.id] = await runStep(step, step.id, ctx, deadline, opts.mcp);
   }
   try {
-    return interpolate(flow.output, ctx);
+    return { status: 'complete', text: interpolate(flow.output, ctx) };
   } catch (e) {
     throw new FlowError('output', errMessage(e));
   }

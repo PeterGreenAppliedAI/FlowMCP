@@ -136,13 +136,11 @@ Flow files are **trusted programs** — treat them like code, review them like c
 - **Hand-rolled protocol**, ~150 lines: `initialize`, `tools/list`, `tools/call`, `ping` over newline-delimited JSON-RPC on stdio. No MCP SDK — the server is small enough to audit in one sitting.
 - **Dependencies:** `zod` and `json5`. That's it.
 - **Small surfaces everywhere:** few tools, ≤300-char descriptions, ≤3 params. Every token in `tools/list` is budget spent by every client on every turn.
-- **v1 flows are read-only by doctrine.** Write actions need approval machinery; that's v2.
+- **Writes are gated by construction.** A flow containing a write step (a POST, or an `mcp_call` to an allowlisted tool) automatically gets the approval gate — there is no opt-out flag. The first call runs the read steps, pauses before the first write, and returns a proposal plus a single-use confirmation token (5-minute expiry). Calling the tool again with `{"confirm": "<token>"}` executes the writes. A `proposal` template on the flow customizes the prompt, with all pre-write step results available. Write flows advertise `readOnlyHint: false` and a `confirm` parameter — all computed from the steps, never declared.
 - stdout is the protocol channel; all logging goes to stderr.
 
 ## Roadmap
 
-- Write-action flows with approval/confirm steps
-- A versioned FORMAT.md — the flow file as a portable, agent-agnostic contract
 - MCP conformance matrix (Inspector-based CI against current protocol revisions)
 - A benchmark: FlowMCP vs. a 30–40-tool primitive server across 7B/30B/frontier models — completion rate, argument accuracy, tokens, tool-call count
 - Destination allowlists and HTTPS policy for `http_request`
@@ -157,6 +155,6 @@ npm run typecheck   # strict TS, no emit
 npm run build       # emits dist/ — the `flowmcp` bin entry points there
 ```
 
-CI runs typecheck + tests on Node 20 and 22 for every push. Engineering log — what worked, what didn't, what the fix was — lives in [DECISIONS.md](DECISIONS.md).
+CI runs typecheck + tests on Node 20 and 22 for every push. Engineering log — what worked, what didn't, what the fix was — lives in [DECISIONS.md](DECISIONS.md). The flow file format is specified as a portable contract in [FORMAT.md](FORMAT.md); benchmark method and results live in [bench/](bench/).
 
 MIT license.

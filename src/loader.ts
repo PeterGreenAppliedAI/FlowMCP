@@ -112,6 +112,22 @@ export function flowEffects(flow: Flow, servers: Record<string, ServerConfig>): 
   return { readOnly: !write, openWorld };
 }
 
+function subtreeHasWrite(step: Step | LeafStep, servers: Record<string, ServerConfig>): boolean {
+  if (step.kind === 'http_request') return step.method === 'POST';
+  if (step.kind === 'mcp_call') return servers[step.server]?.allow.includes(step.tool) ?? false;
+  if (step.kind === 'map') return subtreeHasWrite(step.step, servers);
+  if (step.kind === 'branch') {
+    return [...step.then, ...(step.else ?? [])].some((s) => subtreeHasWrite(s, servers));
+  }
+  return false;
+}
+
+// Top-level steps that perform (or contain) a write — where the approval gate
+// pauses execution. Computed, never declared.
+export function topLevelWriteStepIds(flow: Flow, servers: Record<string, ServerConfig>): Set<string> {
+  return new Set(flow.steps.filter((s) => subtreeHasWrite(s, servers)).map((s) => s.id));
+}
+
 export function checkServerRefs(flows: Flow[], serverNames: Set<string>): void {
   for (const flow of flows) {
     walkSteps(flow, (step) => {

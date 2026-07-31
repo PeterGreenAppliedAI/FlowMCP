@@ -48,6 +48,7 @@ describe('MCP protocol over stdio', () => {
     const tools = res.result!.tools as Array<Record<string, unknown>>;
     expect(tools.map((t) => t.name).sort()).toEqual([
       'always_fails',
+      'approval_demo',
       'mcp_big',
       'mcp_crash',
       'mcp_dogfood',
@@ -58,6 +59,7 @@ describe('MCP protocol over stdio', () => {
       'mcp_write_allowed',
       'mcp_write_blocked',
       'morning_brief',
+      'post_write',
     ]);
     const brief = tools.find((t) => t.name === 'morning_brief')!;
     expect(brief.inputSchema).toEqual({

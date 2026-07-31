@@ -1,0 +1,19 @@
+// A POST http_request — write-capable, so the approval gate must hold it.
+{
+  name: 'post_write',
+  description: 'WHEN TO USE: test — an HTTP POST gated behind approval.',
+  input: {
+    msg: { type: 'string', description: 'Message to post', required: true },
+  },
+  env: ['FIXTURE_BASE'],
+  steps: [
+    {
+      id: 'send',
+      kind: 'http_request',
+      method: 'POST',
+      url: '{{env.FIXTURE_BASE}}/echo-post',
+      body: { msg: '{{input.msg}}' },
+    },
+  ],
+  output: 'posted: {{steps.send.received.msg}}',
+}

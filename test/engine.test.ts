@@ -108,6 +108,16 @@ function makeFlow(partial: Record<string, unknown>): Flow {
   });
 }
 
+async function runText(
+  flow: Flow,
+  args: Record<string, unknown>,
+  opts: Parameters<typeof executeFlow>[2] = {},
+): Promise<string> {
+  const run = await executeFlow(flow, args, opts);
+  if (run.status !== 'complete') throw new Error('unexpected pending flow');
+  return run.text;
+}
+
 describe('executeFlow', () => {
   it('runs transform → template pipelines', async () => {
     const flow = makeFlow({
@@ -119,8 +129,8 @@ describe('executeFlow', () => {
         { id: 'out', kind: 'template', template: 'Hello from {{steps.shape.where}}' },
       ],
     });
-    expect(await executeFlow(flow, {})).toBe('Hello from Paris');
-    expect(await executeFlow(flow, { city: 'Rome' })).toBe('Hello from Rome');
+    expect(await runText(flow, {})).toBe('Hello from Paris');
+    expect(await runText(flow, { city: 'Rome' })).toBe('Hello from Rome');
   });
 
   it('enforces required parameters and types', async () => {
@@ -145,7 +155,7 @@ describe('executeFlow', () => {
         },
       ],
     });
-    expect(await executeFlow(flow, {})).toBe('item 1\nitem 2\nitem 3');
+    expect(await runText(flow, {})).toBe('item 1\nitem 2\nitem 3');
   });
 
   it('rejects maps over more than 10 items', async () => {
@@ -180,8 +190,8 @@ describe('executeFlow', () => {
         { id: 'out', kind: 'template', template: '{{steps.msg}} ({{steps.pick.taken}})' },
       ],
     });
-    expect(await executeFlow(flow, { n: 9 })).toBe('big (then)');
-    expect(await executeFlow(flow, { n: 2 })).toBe('small (else)');
+    expect(await runText(flow, { n: 9 })).toBe('big (then)');
+    expect(await runText(flow, { n: 2 })).toBe('small (else)');
   });
 
   it('exposes only declared env vars to the flow (least privilege)', async () => {
@@ -189,7 +199,7 @@ describe('executeFlow', () => {
       env: ['ALLOWED'],
       steps: [{ id: 'out', kind: 'template', template: '[{{env.ALLOWED}}][{{env.SECRET}}]' }],
     });
-    const result = await executeFlow(flow, {}, { env: { ALLOWED: 'yes', SECRET: 'nope' } });
+    const result = await runText(flow, {}, { env: { ALLOWED: 'yes', SECRET: 'nope' } });
     expect(result).toBe('[yes][]');
   });
 

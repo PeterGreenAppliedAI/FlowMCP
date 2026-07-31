@@ -107,6 +107,9 @@ export const flowSchema = z
     env: z.array(z.string().min(1)).default([]),
     steps: z.array(stepSchema).min(1),
     output: z.string().min(1),
+    // Write flows only: template rendered as the approval proposal, with all
+    // steps before the first write already available as steps.<id>.
+    proposal: z.string().min(1).optional(),
   })
   .strict();
 

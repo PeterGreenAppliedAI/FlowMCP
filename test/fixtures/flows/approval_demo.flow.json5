@@ -1,0 +1,13 @@
+// Read step, then an allowlisted write — must pause with the custom proposal.
+{
+  name: 'approval_demo',
+  description: 'WHEN TO USE: test — read phase, then a write gated behind approval.',
+  input: {},
+  steps: [
+    { id: 'reading', kind: 'mcp_call', server: 'mock', tool: 'echo', args: { probe: 'pre-write' } },
+    { id: 'writing', kind: 'mcp_call', server: 'mock', tool: 'write_thing' },
+    { id: 'done', kind: 'template', template: 'write result: {{steps.writing}}' },
+  ],
+  output: '{{steps.done}}',
+  proposal: 'About to write. Read phase saw: {{steps.reading.echoed.probe}}',
+}

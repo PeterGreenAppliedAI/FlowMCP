@@ -5,21 +5,38 @@
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { checkServerRefs, flowEffects, loadFlows, loadServers, type FlowEffects } from './loader.js';
-import { executeFlow, FlowError } from './engine.js';
+import { randomUUID } from 'node:crypto';
+import {
+  checkServerRefs,
+  flowEffects,
+  loadFlows,
+  loadServers,
+  topLevelWriteStepIds,
+  type FlowEffects,
+} from './loader.js';
+import { executeFlow, resumeFlow, FlowError, type PendingFlow } from './engine.js';
 import { McpPool, PROTOCOL_REVISIONS } from './mcp-pool.js';
 import type { Flow } from './flow-schema.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
+const APPROVAL_TTL_MS = 5 * 60_000;
 // Our surface (initialize / tools/list / tools/call / ping) is unchanged across
 // these revisions; echo the client's requested version when we know it.
 const SUPPORTED_PROTOCOLS = new Set(PROTOCOL_REVISIONS);
 const DEFAULT_PROTOCOL = '2025-03-26';
 
+interface PendingApproval {
+  flowName: string;
+  pending: PendingFlow;
+  expiresAt: number;
+}
+
 interface ServerState {
   flows: Flow[];
   pool: McpPool;
   effects: Map<string, FlowEffects>;
+  writeGates: Map<string, Set<string>>;
+  approvals: Map<string, PendingApproval>;
 }
 
 interface JsonRpcRequest {
@@ -57,6 +74,12 @@ function toolsList(state: ServerState): Record<string, unknown> {
       // Statically computed from the flow's steps — a POST or an allowlisted
       // downstream write makes the flow non-read-only, and clients must see that.
       const fx = state.effects.get(flow.name) ?? { readOnly: false, openWorld: true };
+      if (!fx.readOnly) {
+        properties['confirm'] = {
+          type: 'string',
+          description: 'Approval token from a previous proposal. Only pass after reviewing the proposed writes.',
+        };
+      }
       return {
         name: flow.name,
         description: flow.description,
@@ -75,9 +98,29 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
   const name = params.name;
   const flow = state.flows.find((f) => f.name === name);
   if (!flow) throw new MethodError(-32602, `unknown tool '${String(name)}'`);
-  const args = (params.arguments ?? {}) as Record<string, unknown>;
+  const { confirm, ...args } = (params.arguments ?? {}) as Record<string, unknown>;
   try {
-    const text = await executeFlow(flow, args, { mcp: state.pool });
+    if (confirm !== undefined) {
+      return await confirmedCall(state, flow, String(confirm));
+    }
+    const gate = state.writeGates.get(flow.name);
+    const run = await executeFlow(flow, args, {
+      mcp: state.pool,
+      writeGate: gate?.size ? gate : undefined,
+    });
+    if (run.status === 'complete') {
+      return { content: [{ type: 'text', text: run.text }] };
+    }
+    const token = randomUUID();
+    state.approvals.set(token, {
+      flowName: flow.name,
+      pending: run.pending,
+      expiresAt: Date.now() + APPROVAL_TTL_MS,
+    });
+    const text =
+      `${run.proposalText}\n\n` +
+      `Nothing has been written yet. To approve, call '${flow.name}' again with ` +
+      `{"confirm": "${token}"} within 5 minutes. To cancel, do nothing.`;
     return { content: [{ type: 'text', text }] };
   } catch (e) {
     const detail =
@@ -87,6 +130,28 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
     log(detail);
     return { content: [{ type: 'text', text: detail }], isError: true };
   }
+}
+
+async function confirmedCall(state: ServerState, flow: Flow, token: string): Promise<unknown> {
+  for (const [key, approval] of state.approvals) {
+    if (approval.expiresAt <= Date.now()) state.approvals.delete(key);
+  }
+  const approval = state.approvals.get(token);
+  if (!approval || approval.flowName !== flow.name) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `No pending approval for '${flow.name}' with that token — it may have expired (5 min). Call the tool again without 'confirm' to get a fresh proposal.`,
+        },
+      ],
+      isError: true,
+    };
+  }
+  state.approvals.delete(token); // single use
+  const run = await resumeFlow(flow, approval.pending, { mcp: state.pool });
+  // resumeFlow never re-gates, so it can only complete or throw.
+  return { content: [{ type: 'text', text: run.status === 'complete' ? run.text : '' }] };
 }
 
 class MethodError extends Error {
@@ -138,7 +203,8 @@ async function main(): Promise<void> {
     const servers = await loadServers(dir);
     checkServerRefs(flows, new Set(Object.keys(servers)));
     const effects = new Map(flows.map((f) => [f.name, flowEffects(f, servers)]));
-    state = { flows, pool: new McpPool(servers), effects };
+    const writeGates = new Map(flows.map((f) => [f.name, topLevelWriteStepIds(f, servers)]));
+    state = { flows, pool: new McpPool(servers), effects, writeGates, approvals: new Map() };
     log(`loaded ${flows.length} flows from ${dir}: ${flows.map((f) => f.name).join(', ')}`);
     const serverNames = Object.keys(servers);
     if (serverNames.length) log(`downstream MCP servers: ${serverNames.join(', ')}`);

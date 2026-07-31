@@ -11,6 +11,7 @@ export interface FixtureServer {
 
 // Hermetic stand-in for Open-Meteo and the HN Firebase API.
 export async function startFixtureServer(): Promise<FixtureServer> {
+  let postCount = 0;
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const json = (data: unknown) => {
@@ -39,6 +40,15 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (url.pathname === '/fail') {
       res.statusCode = 500;
       res.end('boom');
+    } else if (url.pathname === '/echo-post' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        postCount++;
+        json({ received: JSON.parse(body || '{}') });
+      });
+    } else if (url.pathname === '/post-count') {
+      json({ count: postCount });
     } else {
       res.statusCode = 404;
       res.end('not found');

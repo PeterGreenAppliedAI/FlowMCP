@@ -45,11 +45,16 @@ describe('composition via mcp_call', () => {
     expect(result.content[0].text).toContain('allow list');
   });
 
-  it('permits a write tool that servers.json5 explicitly allowlists', async () => {
-    const res = await client.request('tools/call', { name: 'mcp_write_allowed' });
-    const result = callResult(res);
-    expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toBe('wrote!');
+  it('permits an allowlisted write tool — behind the approval gate', async () => {
+    const proposal = callResult(await client.request('tools/call', { name: 'mcp_write_allowed' }));
+    expect(proposal.isError).toBeUndefined();
+    expect(proposal.content[0].text).toContain('Nothing has been written yet');
+    const token = /"confirm": "([0-9a-f-]+)"/.exec(proposal.content[0].text)![1];
+    const confirmed = callResult(
+      await client.request('tools/call', { name: 'mcp_write_allowed', arguments: { confirm: token } }),
+    );
+    expect(confirmed.isError).toBeUndefined();
+    expect(confirmed.content[0].text).toBe('wrote!');
   });
 
   it('caps oversized downstream results at maxResultChars', async () => {

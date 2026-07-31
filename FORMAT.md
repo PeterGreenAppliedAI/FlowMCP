@@ -1,4 +1,4 @@
-# The FlowMCP flow format — v0.2
+# The FlowMCP flow format — v0.3
 
 This document specifies `.flow.json5` as a **portable contract**, independent of
 the FlowMCP server that happens to execute it. The claim: a workflow worth
@@ -8,7 +8,7 @@ successful tool-use trace); any runtime that implements this spec can *serve*
 it; any model can *call* it. The format is the interface between those parties.
 
 Versioning: this spec is versioned with the FlowMCP release that implements it
-(currently **0.2**). Additions are backward-compatible within a major version;
+(currently **0.3**). Additions are backward-compatible within a major version;
 a flow file needs no version marker until a breaking change ships, at which
 point a top-level `format` field will be introduced.
 
@@ -29,6 +29,7 @@ invalid. There is no partial loading.
 | `env` | string[] | env vars visible to `{{env.X}}`. **Least privilege**: anything undeclared resolves as absent. Optional; defaults to none |
 | `steps` | step[] | ≥1, executed in order; each result becomes `steps.<id>` |
 | `output` | string | template producing the tool's text result |
+| `proposal` | string | optional; write flows only — template rendered as the approval proposal, with all pre-write step results available |
 
 Parameter: `{ type: 'string'|'number'|'boolean', description (≤200 chars),
 required?: boolean, default?: <matching the declared type> }`. A default whose
@@ -113,8 +114,31 @@ bounds the blast radius is what it can see: declared env vars, declared
 inputs, and policy-gated downstream tools. Review flow files like code;
 don't load flows you haven't read.
 
+## Write flows and the approval gate (v0.3)
+
+A flow is **write-capable** when any step (at any nesting depth) is a POST
+`http_request` or an `mcp_call` to a tool in that server's `allow` list. This is
+computed from the steps — there is no flag to set or forget. Serving semantics:
+
+1. A `tools/call` without `confirm` executes steps **up to the first top-level
+   write step**, then pauses. The result is not an error: it carries the
+   proposal text (the flow's `proposal` template, or an auto-generated summary
+   of the pending write steps) and a **single-use token** with a 5-minute
+   expiry, plus instructions to call the same tool again with
+   `{"confirm": "<token>"}`.
+2. A call with a valid `confirm` resumes execution from the paused step with a
+   fresh flow timeout (the human's deliberation time is not the flow's
+   execution budget) and returns the flow's normal output. Tokens are bound to
+   their flow, deleted on use, and expire silently.
+3. Write flows advertise an optional `confirm` string parameter in their
+   `inputSchema` (this does not count against the 3-parameter limit) and
+   `readOnlyHint: false, destructiveHint: true` annotations.
+
+One approval covers one flow run: after confirmation, the remaining steps —
+including multiple writes — execute without further pauses. If per-write
+granularity matters, split the flow.
+
 ## Reserved for future versions
 
 - `format` field (introduced only on the first breaking change)
-- Write-action flows with approval/confirm steps (v0.3 — in design)
 - Flow-level effect declarations beyond the computed annotations
