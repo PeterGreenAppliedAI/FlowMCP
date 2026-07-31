@@ -1,0 +1,7 @@
+{
+  name: 'mcp_env_probe',
+  description: 'WHEN TO USE: test — downstream child must NOT see parent secrets by default.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'mock', tool: 'env_probe' }],
+  output: 'secret=[{{steps.call.secret}}]',
+}

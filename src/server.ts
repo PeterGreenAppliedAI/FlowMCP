@@ -5,20 +5,21 @@
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { checkServerRefs, loadFlows, loadServers } from './loader.js';
+import { checkServerRefs, flowEffects, loadFlows, loadServers, type FlowEffects } from './loader.js';
 import { executeFlow, FlowError } from './engine.js';
-import { McpPool } from './mcp-pool.js';
+import { McpPool, PROTOCOL_REVISIONS } from './mcp-pool.js';
 import type { Flow } from './flow-schema.js';
 
 const VERSION = '0.2.0';
 // Our surface (initialize / tools/list / tools/call / ping) is unchanged across
 // these revisions; echo the client's requested version when we know it.
-const SUPPORTED_PROTOCOLS = new Set(['2025-03-26', '2025-06-18', '2025-11-25']);
+const SUPPORTED_PROTOCOLS = new Set(PROTOCOL_REVISIONS);
 const DEFAULT_PROTOCOL = '2025-03-26';
 
 interface ServerState {
   flows: Flow[];
   pool: McpPool;
+  effects: Map<string, FlowEffects>;
 }
 
 interface JsonRpcRequest {
@@ -44,21 +45,27 @@ function sendError(id: number | string | null, code: number, message: string): v
   send({ jsonrpc: '2.0', id, error: { code, message } });
 }
 
-function toolsList(flows: Flow[]): Record<string, unknown> {
+function toolsList(state: ServerState): Record<string, unknown> {
   return {
-    tools: flows.map((flow) => {
+    tools: state.flows.map((flow) => {
       const properties: Record<string, unknown> = {};
       const required: string[] = [];
       for (const [name, param] of Object.entries(flow.input)) {
         properties[name] = { type: param.type, description: param.description };
         if (param.required) required.push(name);
       }
+      // Statically computed from the flow's steps — a POST or an allowlisted
+      // downstream write makes the flow non-read-only, and clients must see that.
+      const fx = state.effects.get(flow.name) ?? { readOnly: false, openWorld: true };
       return {
         name: flow.name,
         description: flow.description,
         inputSchema: { type: 'object', properties, ...(required.length ? { required } : {}) },
-        // Flow doctrine, machine-readable: read-only, non-destructive, reaches the open web.
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: {
+          readOnlyHint: fx.readOnly,
+          destructiveHint: !fx.readOnly, // pessimistic: unknown write effects count as destructive
+          openWorldHint: fx.openWorld,
+        },
       };
     }),
   };
@@ -108,7 +115,7 @@ async function dispatch(state: ServerState, req: JsonRpcRequest): Promise<unknow
     case 'ping':
       return {};
     case 'tools/list':
-      return toolsList(state.flows);
+      return toolsList(state);
     case 'tools/call':
       return toolsCall(state, params);
     default:
@@ -130,7 +137,8 @@ async function main(): Promise<void> {
     const flows = await loadFlows(dir);
     const servers = await loadServers(dir);
     checkServerRefs(flows, new Set(Object.keys(servers)));
-    state = { flows, pool: new McpPool(servers) };
+    const effects = new Map(flows.map((f) => [f.name, flowEffects(f, servers)]));
+    state = { flows, pool: new McpPool(servers), effects };
     log(`loaded ${flows.length} flows from ${dir}: ${flows.map((f) => f.name).join(', ')}`);
     const serverNames = Object.keys(servers);
     if (serverNames.length) log(`downstream MCP servers: ${serverNames.join(', ')}`);

@@ -118,10 +118,11 @@ The key property: the wrapped server's 40 tools **never appear in FlowMCP's `too
 
 Rules of engagement:
 
-- **Read-only by default, fail-closed.** A downstream tool is callable only if it declares `annotations.readOnlyHint: true` — or you explicitly name it in that server's `allow` list. Naming a write tool is a consent moment, on purpose.
-- **One session per child, not per flow.** Downstream servers spawn lazily on first use, stay alive across calls, respawn on crash (3 attempts, then a 5s backoff), and shut down after 5 minutes idle.
+- **Read-only by default, fail-closed.** A downstream tool is callable only if it declares `annotations.readOnlyHint: true` — or you explicitly name it in that server's `allow` list. Naming a write tool is a consent moment, on purpose — and it changes what FlowMCP advertises: annotations are **computed per flow** from its steps, so a flow containing a POST or an allowlisted write tool is published with `readOnlyHint: false, destructiveHint: true`. FlowMCP never tells a client a write-capable flow is read-only.
+- **Children get a minimal environment.** Downstream servers receive a baseline (`PATH`, `HOME`, …) plus the vars you configure in their `env` block — never the whole parent environment, unless you set `inheritEnv: true` for that server.
+- **One session per child, not per flow.** Downstream servers spawn lazily on first use, stay alive across calls, respawn on crash (3 attempts, then a 5s backoff), and shut down after 5 minutes idle. The client handshakes at the newest supported protocol revision and validates what comes back.
 - **The step timeout covers spawn + handshake + call** as one unit, bounded by the flow's 60s deadline — a slow cold-start can't invisibly eat the budget.
-- **Results are capped** at `maxResultChars` (default 8K) — downstream verbosity is not your flow's problem to inherit. JSON text results are parsed so later steps can path into them.
+- **Results are capped** at `maxResultChars` (default 8K) — downstream verbosity is not your flow's problem to inherit. `structuredContent` is preferred when the downstream tool provides it; otherwise JSON text results are parsed so later steps can path into them.
 
 ## Trust model
 

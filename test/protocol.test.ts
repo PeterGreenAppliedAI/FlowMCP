@@ -52,6 +52,8 @@ describe('MCP protocol over stdio', () => {
       'mcp_crash',
       'mcp_dogfood',
       'mcp_echo',
+      'mcp_env_inherit',
+      'mcp_env_probe',
       'mcp_slow',
       'mcp_write_allowed',
       'mcp_write_blocked',
@@ -67,6 +69,19 @@ describe('MCP protocol over stdio', () => {
       destructiveHint: false,
       openWorldHint: true,
     });
+  });
+
+  // Regression: annotations are computed from flow effects, never asserted
+  // blanket — a flow reaching an allowlisted write tool must not advertise
+  // itself read-only, or a trusting client may skip confirmation.
+  it('never advertises a write-capable flow as read-only', async () => {
+    const res = await client.request('tools/list');
+    const tools = res.result!.tools as Array<{ name: string; annotations: Record<string, boolean> }>;
+    const writeAllowed = tools.find((t) => t.name === 'mcp_write_allowed')!;
+    expect(writeAllowed.annotations.readOnlyHint).toBe(false);
+    expect(writeAllowed.annotations.destructiveHint).toBe(true);
+    const readOnly = tools.find((t) => t.name === 'mcp_echo')!;
+    expect(readOnly.annotations.readOnlyHint).toBe(true);
   });
 
   it('echoes a supported requested protocolVersion (negotiation)', async () => {

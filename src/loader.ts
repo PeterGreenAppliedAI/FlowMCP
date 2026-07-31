@@ -88,6 +88,30 @@ export async function loadServers(dir: string): Promise<Record<string, ServerCon
   return parsed.data;
 }
 
+export interface FlowEffects {
+  readOnly: boolean;
+  openWorld: boolean;
+}
+
+// A flow's write capability is statically knowable: only a POST http_request or
+// an mcp_call to an allowlisted (i.e. non-read-only) downstream tool can write.
+// Everything else the engine can execute is read-only by construction.
+export function flowEffects(flow: Flow, servers: Record<string, ServerConfig>): FlowEffects {
+  let write = false;
+  let openWorld = false;
+  walkSteps(flow, (step) => {
+    if (step.kind === 'http_request') {
+      openWorld = true;
+      if (step.method === 'POST') write = true;
+    }
+    if (step.kind === 'mcp_call') {
+      openWorld = true;
+      if (servers[step.server]?.allow.includes(step.tool)) write = true;
+    }
+  });
+  return { readOnly: !write, openWorld };
+}
+
 export function checkServerRefs(flows: Flow[], serverNames: Set<string>): void {
   for (const flow of flows) {
     walkSteps(flow, (step) => {

@@ -2,6 +2,39 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-07-31 — advertised read-only while permitting an allowlisted write (review round 2)
+
+**What didn't work:** every flow was published with a blanket
+`annotations: { readOnlyHint: true }` — doctrine stated as metadata. But v0.2's
+composition layer added the allow list, so `mcp_write_allowed` performed a real
+write while its advertisement said read-only. A trusting MCP client could skip a
+confirmation prompt on the strength of our own inaccurate metadata. The shipped
+test flow demonstrated the contradiction; the second external review round caught
+it.
+
+**The fix:** annotations are now computed, not asserted. Write capability is
+statically knowable from a flow's steps — only a POST `http_request` or an
+`mcp_call` to an allowlisted tool can write — so the loader derives per-flow
+effects and `tools/list` publishes `readOnlyHint: false, destructiveHint: true`
+for any write-capable flow (pessimistic on destructiveness), and computes
+`openWorldHint` from whether the flow touches the network at all. Regression test:
+`mcp_write_allowed` must never be advertised read-only.
+
+**The lesson:** every doctrine claim needs a mechanism that computes it. The v1
+"read-only by doctrine" comment survived one feature addition before becoming a
+lie; derived metadata can't drift.
+
+## 2026-07-31 — downstream children inherited the full parent environment
+
+**What didn't work:** `{ ...process.env }` in the pool's spawn call. Flows got
+least-privilege env in the previous hardening pass, but every spawned MCP server
+still received all ambient secrets — the same hole, one layer down.
+
+**The fix:** children get a baseline (`PATH`, `HOME`, `TMPDIR`, `LANG`, `TERM`)
+plus that server's configured `env` block; `inheritEnv: true` is an explicit
+operator opt-in. Tested by planting `TEST_SECRET` in the parent and asserting a
+downstream probe can't see it — and can when opted in.
+
 ## 2026-07-31 — retry-on-network-error could double a POST (external review catch)
 
 **What didn't work:** the http_request step retried once on any network failure,

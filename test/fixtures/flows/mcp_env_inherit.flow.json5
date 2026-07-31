@@ -1,0 +1,7 @@
+{
+  name: 'mcp_env_inherit',
+  description: 'WHEN TO USE: test — inheritEnv: true passes the parent environment through.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'mock_inherit', tool: 'env_probe' }],
+  output: 'secret=[{{steps.call.secret}}]',
+}

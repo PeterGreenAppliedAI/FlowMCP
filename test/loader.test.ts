@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadFlows } from '../src/loader.js';
+import { flowEffects, loadFlows } from '../src/loader.js';
+import { flowSchema } from '../src/flow-schema.js';
+import { serversSchema } from '../src/mcp-pool.js';
 import { projectRoot } from './helpers.js';
 
 async function flowDir(files: Record<string, string>): Promise<string> {
@@ -77,5 +79,46 @@ describe('loadFlows', () => {
 
   it('rejects a missing directory', async () => {
     await expect(loadFlows('/nonexistent/flows')).rejects.toThrow(/not found/);
+  });
+});
+
+describe('flowEffects', () => {
+  const servers = serversSchema.parse({ m: { command: 'x', allow: ['write_it'] } });
+  const base = {
+    name: 'fx',
+    description: 'WHEN TO USE: test.',
+    input: {},
+    output: '{{steps.s}}',
+  };
+
+  it('marks GET-only and template flows read-only; template-only is closed-world', () => {
+    const httpFlow = flowSchema.parse({
+      ...base,
+      steps: [{ id: 's', kind: 'http_request', url: 'http://x' }],
+    });
+    expect(flowEffects(httpFlow, servers)).toEqual({ readOnly: true, openWorld: true });
+    const templateFlow = flowSchema.parse({
+      ...base,
+      steps: [{ id: 's', kind: 'template', template: 'hi' }],
+    });
+    expect(flowEffects(templateFlow, servers)).toEqual({ readOnly: true, openWorld: false });
+  });
+
+  it('marks POST and allowlisted mcp_call flows write-capable', () => {
+    const postFlow = flowSchema.parse({
+      ...base,
+      steps: [{ id: 's', kind: 'http_request', method: 'POST', url: 'http://x' }],
+    });
+    expect(flowEffects(postFlow, servers).readOnly).toBe(false);
+    const writeCall = flowSchema.parse({
+      ...base,
+      steps: [{ id: 's', kind: 'mcp_call', server: 'm', tool: 'write_it' }],
+    });
+    expect(flowEffects(writeCall, servers).readOnly).toBe(false);
+    const readCall = flowSchema.parse({
+      ...base,
+      steps: [{ id: 's', kind: 'mcp_call', server: 'm', tool: 'read_it' }],
+    });
+    expect(flowEffects(readCall, servers).readOnly).toBe(true);
   });
 });

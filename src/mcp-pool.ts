@@ -10,6 +10,15 @@ import { interpolate } from './interpolate.js';
 
 const IDENT = /^[a-z][a-z0-9_]*$/;
 
+// Protocol revisions this codebase's four-method surface is unchanged across.
+// The downstream client initiates with the newest and accepts any of them.
+export const PROTOCOL_REVISIONS = ['2025-03-26', '2025-06-18', '2025-11-25'];
+const NEWEST_PROTOCOL = PROTOCOL_REVISIONS[PROTOCOL_REVISIONS.length - 1]!;
+
+// Baseline env for downstream children when inheritEnv is off: enough to run,
+// nothing that could hold a secret.
+const BASELINE_ENV_KEYS = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'TERM'];
+
 export const serversSchema = z.record(
   z.string().regex(IDENT, 'server name must be snake_case'),
   z
@@ -18,6 +27,7 @@ export const serversSchema = z.record(
       args: z.array(z.string()).default([]),
       env: z.record(z.string()).default({}), // values may use {{env.X}} — never inline secrets
       allow: z.array(z.string()).default([]), // non-read-only tools callable by this server's flows
+      inheritEnv: z.boolean().default(false), // opt-in: pass the full parent environment through
     })
     .strict(),
 );
@@ -29,8 +39,9 @@ interface DownstreamTool {
   annotations?: { readOnlyHint?: boolean };
 }
 
-interface McpResult {
+export interface McpResult {
   content?: Array<{ type: string; text?: string }>;
+  structuredContent?: unknown;
   isError?: boolean;
 }
 
@@ -110,7 +121,11 @@ class DownstreamServer {
   }
 
   private async spawnAndHandshake(deadline: number): Promise<void> {
-    const env: Record<string, string | undefined> = { ...process.env };
+    // Least privilege for children too: baseline env + configured vars, unless
+    // the operator opts into full inheritance.
+    const env: Record<string, string | undefined> = this.config.inheritEnv
+      ? { ...process.env }
+      : Object.fromEntries(BASELINE_ENV_KEYS.map((k) => [k, process.env[k]]));
     for (const [key, value] of Object.entries(this.config.env)) {
       env[key] = interpolate(value, { env: process.env });
     }
@@ -122,15 +137,20 @@ class DownstreamServer {
     child.stdout.on('data', (chunk: Buffer) => this.onData(chunk));
     child.stderr.on('data', (chunk: Buffer) => process.stderr.write(`flowmcp: [${this.name}] ${chunk}`));
 
-    await this.request(
+    const init = (await this.request(
       'initialize',
       {
-        protocolVersion: '2025-03-26',
+        protocolVersion: NEWEST_PROTOCOL,
         capabilities: {},
         clientInfo: { name: 'flowmcp', version: '0.2.0' },
       },
       deadline,
-    );
+    )) as { protocolVersion?: string };
+    if (!PROTOCOL_REVISIONS.includes(init?.protocolVersion ?? '')) {
+      throw new Error(
+        `server '${this.name}' negotiated unsupported protocol version '${init?.protocolVersion}'`,
+      );
+    }
     this.notify('notifications/initialized');
     const listed = (await this.request('tools/list', {}, deadline)) as { tools: DownstreamTool[] };
     this.tools = new Map(listed.tools.map((t) => [t.name, t]));

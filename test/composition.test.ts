@@ -16,7 +16,9 @@ describe('composition via mcp_call', () => {
   let client: RpcClient;
 
   beforeAll(async () => {
-    client = new RpcClient(spawnServer(flowsDir));
+    // TEST_SECRET is planted in the flowmcp process env; downstream children
+    // must not see it unless their server config opts into inheritEnv.
+    client = new RpcClient(spawnServer(flowsDir, { TEST_SECRET: 'leaked-if-visible' }));
     await client.request('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
     client.notify('notifications/initialized');
   });
@@ -75,6 +77,20 @@ describe('composition via mcp_call', () => {
     );
     expect(after.isError).toBeUndefined();
     expect(after.content[0].text).toBe('echoed: still alive');
+  });
+
+  it('does not leak the parent environment to downstream children by default', async () => {
+    const res = await client.request('tools/call', { name: 'mcp_env_probe' });
+    const result = callResult(res);
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toBe('secret=[]');
+  });
+
+  it('passes the parent environment through when inheritEnv is opted in', async () => {
+    const res = await client.request('tools/call', { name: 'mcp_env_inherit' });
+    const result = callResult(res);
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toBe('secret=[leaked-if-visible]');
   });
 
   it('dogfoods: a flowmcp flow calls a flow on another flowmcp instance', async () => {

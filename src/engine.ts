@@ -127,6 +127,14 @@ async function runMcpCall(
   if (result.isError) {
     throw new Error(`tool '${step.tool}' on server '${step.server}' returned an error: ${text || '(no detail)'}`);
   }
+  // Prefer typed structuredContent over parsing JSON back out of text.
+  if (result.structuredContent !== undefined) {
+    const json = JSON.stringify(result.structuredContent);
+    if (json.length > step.maxResultChars) {
+      return json.slice(0, step.maxResultChars) + `\n…[truncated ${json.length - step.maxResultChars} chars]`;
+    }
+    return result.structuredContent;
+  }
   if (text.length > step.maxResultChars) {
     return text.slice(0, step.maxResultChars) + `\n…[truncated ${text.length - step.maxResultChars} chars]`;
   }
