@@ -31,8 +31,19 @@ for (const t of PRIMITIVE_TOOLS) {
 
 (async () => {
   // new Function inside the disposable child — the process is the boundary.
-  const factory = new Function(`${code}\n;return typeof main === 'function' ? main : null;`);
-  const main = factory() as null | ((t: typeof tools) => Promise<unknown>);
+  // Provide CommonJS-shaped `module`/`exports` stubs: models habitually append
+  // `module.exports = main`, and a missing `module` failed otherwise-valid
+  // scripts before their first tool call.
+  const moduleStub = { exports: {} as Record<string, unknown> };
+  // `tools` is also passed into scope: models often append a top-level
+  // `main(tools);` call, which must not crash extraction of the function.
+  const factory = new Function(
+    'module',
+    'exports',
+    'tools',
+    `${code}\n;return typeof main === 'function' ? main : (module.exports && typeof module.exports === 'function' ? module.exports : null);`,
+  );
+  const main = factory(moduleStub, moduleStub.exports, tools) as null | ((t: typeof tools) => Promise<unknown>);
   if (!main) {
     console.error('SCRIPT_ERROR: script did not define async function main(tools)');
     process.exit(1);

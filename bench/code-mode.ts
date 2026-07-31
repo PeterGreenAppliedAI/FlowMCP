@@ -84,7 +84,8 @@ async function chat(model: string, messages: Array<{ role: string; content: stri
 
 function extractCode(text: string): string | null {
   const fence = /```(?:javascript|js)?\s*\n([\s\S]*?)```/.exec(text);
-  const code = fence ? fence[1]! : text;
+  // Strip stray/asymmetric fences (models sometimes emit only a closing one).
+  const code = (fence ? fence[1]! : text).replace(/^```(?:javascript|js)?\s*$/gm, '');
   return /function\s+main|main\s*=/.test(code) ? code : null;
 }
 
