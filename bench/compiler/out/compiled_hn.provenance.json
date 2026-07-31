@@ -1,0 +1,10 @@
+{
+  "source": "gemma4_12b-E1-hn_now-1.v0.json",
+  "flowName": "compiled_hn",
+  "warnings": [
+    "per-item ordinal numbering dropped: the flow DSL map has no loop index; emitted as list dashes"
+  ],
+  "droppedCalls": [],
+  "dedupedCalls": [],
+  "nodes": 2
+}

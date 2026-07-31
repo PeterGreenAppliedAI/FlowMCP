@@ -1,0 +1,8 @@
+// Downstream server for compiled flows: the 35 primitives, variant via env.
+{
+  prims: {
+    command: 'node',
+    args: ['--import', 'tsx', 'bench/compiler/primitives-server.ts'],
+    env: { VARIANT: '{{env.PRIMS_VARIANT}}' },
+  },
+}

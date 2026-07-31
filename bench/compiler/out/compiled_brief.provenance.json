@@ -1,0 +1,11 @@
+{
+  "source": "qwen2.5_7b-E1-brief_city-1.v0.json",
+  "flowName": "compiled_brief",
+  "warnings": [
+    "get_daily_forecast.days: numeric const emitted as string",
+    "per-item ordinal numbering dropped: the flow DSL map has no loop index; emitted as list dashes"
+  ],
+  "droppedCalls": [],
+  "dedupedCalls": [],
+  "nodes": 4
+}
