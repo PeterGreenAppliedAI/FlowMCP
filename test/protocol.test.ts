@@ -46,12 +46,23 @@ describe('MCP protocol over stdio', () => {
   it('lists one tool per flow with a small input schema', async () => {
     const res = await client.request('tools/list');
     const tools = res.result!.tools as Array<Record<string, unknown>>;
-    expect(tools.map((t) => t.name).sort()).toEqual(['always_fails', 'morning_brief']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'always_fails',
+      'mcp_big',
+      'mcp_crash',
+      'mcp_dogfood',
+      'mcp_echo',
+      'mcp_slow',
+      'mcp_write_allowed',
+      'mcp_write_blocked',
+      'morning_brief',
+    ]);
     const brief = tools.find((t) => t.name === 'morning_brief')!;
     expect(brief.inputSchema).toEqual({
       type: 'object',
       properties: { city: { type: 'string', description: 'City for the weather section' } },
     });
+    expect(brief.annotations).toEqual({ readOnlyHint: true });
   });
 
   it('runs morning_brief end to end against fixtures', async () => {

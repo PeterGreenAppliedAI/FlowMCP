@@ -1,0 +1,8 @@
+// References an MCP server that no servers.json5 declares — must fail startup.
+{
+  name: 'orphan',
+  description: 'WHEN TO USE: never — references a missing MCP server.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'ghost', tool: 'anything' }],
+  output: '{{steps.call}}',
+}

@@ -1,0 +1,7 @@
+{
+  name: 'mcp_write_blocked',
+  description: 'WHEN TO USE: test — write tool NOT in the allow list; must be refused.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'mock', tool: 'delete_thing' }],
+  output: '{{steps.call}}',
+}

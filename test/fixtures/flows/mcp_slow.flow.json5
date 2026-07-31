@@ -1,0 +1,7 @@
+{
+  name: 'mcp_slow',
+  description: 'WHEN TO USE: test — the step timeout covers the whole downstream call.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'mock', tool: 'slow', timeoutMs: 500 }],
+  output: '{{steps.call}}',
+}

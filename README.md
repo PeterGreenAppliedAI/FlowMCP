@@ -63,6 +63,7 @@ Flows are data, not code. The server loads every `flows/*.flow.json5` at startup
 | `template` | `template` | Mustache-style string build: `{{steps.x.y[0]}}`. Arrays join line-per-item; missing terminal values render as `''`. |
 | `map` | `over`, `as?` (default `item`), `step` | Run one leaf step per array element, sequentially, **max 10 items** — slice with `steps.ids[0:5]`. |
 | `branch` | `if`, `then`, `else?` | Evaluate a condition, run one of two step lists. No nested branches. |
+| `mcp_call` | `server`, `tool`, `args?`, `timeoutMs?` (default 30000), `maxResultChars?` (default 8000) | Call one tool on a downstream MCP server from `servers.json5`. See Composition below. |
 
 Everything downstream of a step sees `input.*`, `env.*` (for `{{env.API_KEY}}` — never put secrets in flow files), and `steps.<id>`. A failed step aborts the flow and returns a structured `isError` result naming the step. Whole-flow timeout: 60s.
 
@@ -88,6 +89,37 @@ npm start -- --flows ~/my-flows
 }
 ```
 
+## Composition: wrapping other MCP servers
+
+Flows can call tools on *other* MCP servers — and this is where the thesis becomes an operation instead of an opinion. Register downstream servers in a `servers.json5` next to your flow files:
+
+```json5
+{
+  github: {
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-github'],
+    env: { GITHUB_TOKEN: '{{env.GITHUB_TOKEN}}' },  // interpolated — never inline secrets
+    allow: [],                                       // non-read-only tools need explicit listing
+  },
+}
+```
+
+Then use an `mcp_call` step like any other:
+
+```json5
+{ id: 'issue', kind: 'mcp_call', server: 'github', tool: 'get_issue',
+  args: { owner: 'x', repo: 'y', issue_number: '{{input.n}}' } }
+```
+
+The key property: the wrapped server's 40 tools **never appear in FlowMCP's `tools/list`**. 40 tools in, 3 workflows out — the model's surface never grows, no matter how many servers sit behind it.
+
+Rules of engagement:
+
+- **Read-only by default, fail-closed.** A downstream tool is callable only if it declares `annotations.readOnlyHint: true` — or you explicitly name it in that server's `allow` list. Naming a write tool is a consent moment, on purpose.
+- **One session per child, not per flow.** Downstream servers spawn lazily on first use, stay alive across calls, respawn on crash (3 attempts, then a 5s backoff), and shut down after 5 minutes idle.
+- **The step timeout covers spawn + handshake + call** as one unit, bounded by the flow's 60s deadline — a slow cold-start can't invisibly eat the budget.
+- **Results are capped** at `maxResultChars` (default 8K) — downstream verbosity is not your flow's problem to inherit. JSON text results are parsed so later steps can path into them.
+
 ## Design constraints (on purpose)
 
 - **Hand-rolled protocol**, ~150 lines: `initialize`, `tools/list`, `tools/call`, `ping` over newline-delimited JSON-RPC on stdio. No MCP SDK — the server is small enough to audit in one sitting.
@@ -96,10 +128,10 @@ npm start -- --flows ~/my-flows
 - **v1 flows are read-only by doctrine.** Write actions need approval machinery; that's v2.
 - stdout is the protocol channel; all logging goes to stderr.
 
-## Roadmap (deliberately not in v1)
+## Roadmap
 
 - Write-action flows with approval/confirm steps
-- Flows that call **other MCP servers** as steps — composition
+- A versioned FORMAT.md — the flow file as a portable, agent-agnostic contract
 - HTTP transport for the server itself
 - Flow hot-reload
 

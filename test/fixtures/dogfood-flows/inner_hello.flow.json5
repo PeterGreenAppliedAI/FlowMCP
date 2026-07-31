@@ -1,0 +1,7 @@
+{
+  name: 'inner_hello',
+  description: 'WHEN TO USE: test — a flow served by the inner flowmcp instance.',
+  input: {},
+  steps: [{ id: 'out', kind: 'template', template: 'hello from the inner flowmcp' }],
+  output: '{{steps.out}}',
+}

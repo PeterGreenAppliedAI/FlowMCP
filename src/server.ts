@@ -5,12 +5,18 @@
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { loadFlows } from './loader.js';
+import { checkServerRefs, loadFlows, loadServers } from './loader.js';
 import { executeFlow, FlowError } from './engine.js';
+import { McpPool } from './mcp-pool.js';
 import type { Flow } from './flow-schema.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const PROTOCOL_VERSION = '2025-03-26';
+
+interface ServerState {
+  flows: Flow[];
+  pool: McpPool;
+}
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -48,18 +54,19 @@ function toolsList(flows: Flow[]): Record<string, unknown> {
         name: flow.name,
         description: flow.description,
         inputSchema: { type: 'object', properties, ...(required.length ? { required } : {}) },
+        annotations: { readOnlyHint: true }, // v1 doctrine: all flows are read-only
       };
     }),
   };
 }
 
-async function toolsCall(flows: Flow[], params: Record<string, unknown>): Promise<unknown> {
+async function toolsCall(state: ServerState, params: Record<string, unknown>): Promise<unknown> {
   const name = params.name;
-  const flow = flows.find((f) => f.name === name);
+  const flow = state.flows.find((f) => f.name === name);
   if (!flow) throw new MethodError(-32602, `unknown tool '${String(name)}'`);
   const args = (params.arguments ?? {}) as Record<string, unknown>;
   try {
-    const text = await executeFlow(flow, args);
+    const text = await executeFlow(flow, args, { mcp: state.pool });
     return { content: [{ type: 'text', text }] };
   } catch (e) {
     const detail =
@@ -80,7 +87,7 @@ class MethodError extends Error {
   }
 }
 
-async function dispatch(flows: Flow[], req: JsonRpcRequest): Promise<unknown> {
+async function dispatch(state: ServerState, req: JsonRpcRequest): Promise<unknown> {
   const params = req.params ?? {};
   switch (req.method) {
     case 'initialize':
@@ -92,9 +99,9 @@ async function dispatch(flows: Flow[], req: JsonRpcRequest): Promise<unknown> {
     case 'ping':
       return {};
     case 'tools/list':
-      return toolsList(flows);
+      return toolsList(state.flows);
     case 'tools/call':
-      return toolsCall(flows, params);
+      return toolsCall(state, params);
     default:
       throw new MethodError(-32601, `method not found: ${req.method}`);
   }
@@ -109,28 +116,36 @@ function flowsDir(): string {
 
 async function main(): Promise<void> {
   const dir = flowsDir();
-  let flows: Flow[];
+  let state: ServerState;
   try {
-    flows = await loadFlows(dir);
+    const flows = await loadFlows(dir);
+    const servers = await loadServers(dir);
+    checkServerRefs(flows, new Set(Object.keys(servers)));
+    state = { flows, pool: new McpPool(servers) };
+    log(`loaded ${flows.length} flows from ${dir}: ${flows.map((f) => f.name).join(', ')}`);
+    const serverNames = Object.keys(servers);
+    if (serverNames.length) log(`downstream MCP servers: ${serverNames.join(', ')}`);
   } catch (e) {
     log(`startup failed: ${e instanceof Error ? e.message : e}`);
     process.exit(1);
   }
-  log(`loaded ${flows.length} flows from ${dir}: ${flows.map((f) => f.name).join(', ')}`);
 
   const rl = createInterface({ input: process.stdin });
   let queue = Promise.resolve();
   rl.on('line', (line) => {
     if (!line.trim()) return;
-    queue = queue.then(() => handleLine(flows, line));
+    queue = queue.then(() => handleLine(state, line));
   });
   rl.on('close', () => {
     // Drain in-flight requests before exiting (stdin closes immediately for piped input).
-    void queue.then(() => process.exit(0));
+    void queue.then(() => {
+      state.pool.closeAll();
+      process.exit(0);
+    });
   });
 }
 
-async function handleLine(flows: Flow[], line: string): Promise<void> {
+async function handleLine(state: ServerState, line: string): Promise<void> {
   let req: JsonRpcRequest;
   try {
     req = JSON.parse(line);
@@ -140,7 +155,7 @@ async function handleLine(flows: Flow[], line: string): Promise<void> {
   }
   const isNotification = req.id === undefined;
   try {
-    const result = await dispatch(flows, req);
+    const result = await dispatch(state, req);
     if (!isNotification) sendResult(req.id!, result);
   } catch (e) {
     if (isNotification) return;

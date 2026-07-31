@@ -1,0 +1,14 @@
+// Downstream MCP servers for composition tests. Paths are relative to the
+// flowmcp server's cwd (the project root in tests).
+{
+  mock: {
+    command: 'node',
+    args: ['--import', 'tsx', 'test/fixtures/mock-mcp.ts'],
+    allow: ['write_thing'], // explicit consent for one non-read-only tool
+  },
+  // Dogfood: a second flowmcp instance as the downstream server.
+  self: {
+    command: 'node',
+    args: ['--import', 'tsx', 'src/server.ts', '--flows', 'test/fixtures/dogfood-flows'],
+  },
+}

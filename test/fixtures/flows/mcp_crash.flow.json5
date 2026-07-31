@@ -1,0 +1,7 @@
+{
+  name: 'mcp_crash',
+  description: 'WHEN TO USE: test — downstream server dies mid-call; step must fail cleanly.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'mock', tool: 'crash' }],
+  output: '{{steps.call}}',
+}

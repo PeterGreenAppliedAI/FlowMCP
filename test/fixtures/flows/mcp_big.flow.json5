@@ -1,0 +1,7 @@
+{
+  name: 'mcp_big',
+  description: 'WHEN TO USE: test — downstream result larger than maxResultChars gets truncated.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'mock', tool: 'big_dump' }],
+  output: '{{steps.call}}',
+}

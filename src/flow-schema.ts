@@ -25,13 +25,27 @@ const leafHttp = z.object({ kind: z.literal('http_request'), ...httpFields }).st
 const leafTransform = z.object({ kind: z.literal('transform'), expr: z.string().min(1) }).strict();
 const leafTemplate = z.object({ kind: z.literal('template'), template: z.string().min(1) }).strict();
 
-const leafStepSchema = z.discriminatedUnion('kind', [leafHttp, leafTransform, leafTemplate]);
+// Composition: call one tool on a downstream MCP server from servers.json5.
+// timeoutMs covers spawn + handshake + call as one unit.
+const leafMcpCall = z
+  .object({
+    kind: z.literal('mcp_call'),
+    server: z.string().regex(IDENT),
+    tool: z.string().min(1),
+    args: z.record(z.unknown()).default({}),
+    timeoutMs: z.number().int().positive().max(60_000).default(30_000),
+    maxResultChars: z.number().int().positive().max(1_000_000).default(8_000),
+  })
+  .strict();
+
+const leafStepSchema = z.discriminatedUnion('kind', [leafHttp, leafTransform, leafTemplate, leafMcpCall]);
 
 const idField = { id: z.string().regex(IDENT, 'step id must be snake_case') };
 
 const namedHttp = leafHttp.extend(idField);
 const namedTransform = leafTransform.extend(idField);
 const namedTemplate = leafTemplate.extend(idField);
+const namedMcpCall = leafMcpCall.extend(idField);
 
 const mapStep = z
   .object({
@@ -48,7 +62,13 @@ const mapStep = z
   .strict();
 
 // branch bodies allow every kind except another branch — no recursion in v1.
-const branchBodyStep = z.discriminatedUnion('kind', [namedHttp, namedTransform, namedTemplate, mapStep]);
+const branchBodyStep = z.discriminatedUnion('kind', [
+  namedHttp,
+  namedTransform,
+  namedTemplate,
+  namedMcpCall,
+  mapStep,
+]);
 
 const branchStep = z
   .object({
@@ -64,6 +84,7 @@ export const stepSchema = z.discriminatedUnion('kind', [
   namedHttp,
   namedTransform,
   namedTemplate,
+  namedMcpCall,
   mapStep,
   branchStep,
 ]);
@@ -86,4 +107,5 @@ export type Flow = z.infer<typeof flowSchema>;
 export type Step = z.infer<typeof stepSchema>;
 export type LeafStep = z.infer<typeof leafStepSchema>;
 export type HttpStep = z.infer<typeof leafHttp>;
+export type McpCallStep = z.infer<typeof leafMcpCall>;
 export type Param = z.infer<typeof paramSchema>;

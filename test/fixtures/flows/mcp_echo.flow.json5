@@ -1,0 +1,11 @@
+{
+  name: 'mcp_echo',
+  description: 'WHEN TO USE: test — round-trip a message through the mock MCP server.',
+  input: {
+    msg: { type: 'string', description: 'Message to echo', required: true },
+  },
+  steps: [
+    { id: 'call', kind: 'mcp_call', server: 'mock', tool: 'echo', args: { msg: '{{input.msg}}' } },
+  ],
+  output: 'echoed: {{steps.call.echoed.msg}}',
+}

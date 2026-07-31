@@ -1,0 +1,7 @@
+{
+  name: 'mcp_dogfood',
+  description: 'WHEN TO USE: test — flowmcp calling a flow on another flowmcp instance.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'self', tool: 'inner_hello' }],
+  output: '{{steps.call}}',
+}

@@ -1,0 +1,7 @@
+{
+  name: 'mcp_write_allowed',
+  description: 'WHEN TO USE: test — write tool explicitly allowlisted in servers.json5.',
+  input: {},
+  steps: [{ id: 'call', kind: 'mcp_call', server: 'mock', tool: 'write_thing' }],
+  output: '{{steps.call}}',
+}
