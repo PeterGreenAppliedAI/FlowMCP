@@ -55,11 +55,27 @@ Any OpenAI-compatible endpoint with function calling works. Results land in
 fixture HTTP server and the FlowMCP child process are managed by the harness —
 no keys, no network beyond your gateway.
 
-## Planned conditions
+## Conditions C and D (run 2026-07-31, wave 4)
 
-- **C — the strong baseline:** flows vs *tool search* (surface loads on demand)
-  and vs *code mode* (model writes a script against the API). Prediction on
-  record: tool search fixes token cost, not orchestration reliability.
-- **D — the mixed surface:** flows and primitives exposed together, with
-  partial-match tasks (flow + one extra call) and decline tasks (no flow
-  matches — does the model correctly ignore the façade?).
+- **C — primitives behind tool search** (`search_tools` + `call_tool`, defs load
+  on demand): the prediction on record — search fixes token cost, not
+  orchestration reliability — **held exactly**. Success 5/48, identical to
+  condition B's 5/48, at roughly half the tokens (12.9K → 6.0K avg/run).
+  Discovery is not sequencing.
+- **D — the mixed surface** (2 flows + 35 primitives together, adding
+  partial-match and decline tasks): 53/80 (66%). Strong façade models stayed
+  perfect (qwen2.5:7b, gemma4:12b, qwen3.6:35b — 10/10 each, including
+  flow + primitive composition). **Zero façade misuse across all 16 decline
+  runs** — no model ever called a flow when none applied. Honest casualty:
+  mistral:7b-instruct made zero tool calls in all ten D runs — 37 definitions
+  pushed it past its capability cliff (it managed 4/6 with two tools).
+- DeepSeek v4-flash (largest model tested): A 5/6 @1.5K tok · B 1/6 @37K tok ·
+  C 1/6 @18K tok · D 7/10 @10K tok.
+
+Raw per-run results and full wave-4 transcripts are committed in
+`bench/results/`. Harness commits: waves 1–2 `cf56b01`, wave 3 `5ce273e`,
+wave 4 `847bbf8`. Remaining untested strong baseline: **code mode** (model
+writes a script against the API) — designed, not built.
+
+One sentence: *search can expose capabilities, but only a workflow can encode
+the deliverable.*
