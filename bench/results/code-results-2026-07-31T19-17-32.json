@@ -1,0 +1,41 @@
+[
+  {
+    "variant": "E1",
+    "model": "gpu-node/qwen3.5:9b",
+    "task": "brief_city",
+    "trial": 1,
+    "success": false,
+    "attempts": 1,
+    "modelTokens": 1437,
+    "apiCalls": 0,
+    "execMs": 146,
+    "failure": "exec_error",
+    "reuseSuccess": null
+  },
+  {
+    "variant": "E1",
+    "model": "gpu-node/qwen3.5:9b",
+    "task": "hn_now",
+    "trial": 1,
+    "success": false,
+    "attempts": 1,
+    "modelTokens": 1342,
+    "apiCalls": 0,
+    "execMs": 169,
+    "failure": "exec_error",
+    "reuseSuccess": null
+  },
+  {
+    "variant": "E1",
+    "model": "gpu-node/qwen3.5:9b",
+    "task": "brief_default",
+    "trial": 1,
+    "success": false,
+    "attempts": 1,
+    "modelTokens": 1549,
+    "apiCalls": 0,
+    "execMs": 181,
+    "failure": "exec_error",
+    "reuseSuccess": null
+  }
+]

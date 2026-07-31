@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use FlowMCP or its benchmark data, please cite it as below."
+title: "FlowMCP: workflows as MCP tools — a six-condition benchmark of tool-surface design"
+type: software
+authors:
+  - family-names: Green
+    given-names: Peter
+repository-code: "https://github.com/PeterGreenAppliedAI/FlowMCP"
+date-released: 2026-07-31
+version: 0.3.0
+keywords:
+  - Model Context Protocol
+  - LLM agents
+  - tool use
+  - workflow compilation
+  - benchmark
+abstract: >-
+  FlowMCP is an MCP server in which each tool is one declarative workflow
+  executed by a deterministic engine. The repository includes a six-condition
+  benchmark (facade, primitive surface, tool search, mixed surface, textual
+  recipe, code mode) across ten self-hosted models — 610 runs executed, 440
+  analyzed, raw data and transcripts committed — measuring how tool-surface
+  design moves task specification, sequencing, and recurring execution into
+  or out of inference.
