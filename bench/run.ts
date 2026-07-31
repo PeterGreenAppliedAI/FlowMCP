@@ -79,11 +79,23 @@ interface RunResult {
   note: string;
 }
 
+// Optional per-request generation cap (--max-tokens N): bounds runaway
+// generations (e.g. a reasoning model deliberating instead of calling a tool)
+// without gateway-side clamping.
+const maxTokensArg = process.argv.indexOf('--max-tokens');
+const MAX_TOKENS = maxTokensArg !== -1 ? Number(process.argv[maxTokensArg + 1]) : undefined;
+
 async function chat(model: string, messages: ChatMessage[], tools: OpenAiTool[]) {
   const res = await fetch(`${GATEWAY}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model, messages, tools, temperature: 0 }),
+    body: JSON.stringify({
+      model,
+      messages,
+      tools,
+      temperature: 0,
+      ...(MAX_TOKENS ? { max_tokens: MAX_TOKENS } : {}),
+    }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`gateway HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
