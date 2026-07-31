@@ -114,7 +114,7 @@ bounds the blast radius is what it can see: declared env vars, declared
 inputs, and policy-gated downstream tools. Review flow files like code;
 don't load flows you haven't read.
 
-## Write flows and the approval gate (v0.3)
+## Write flows and two-phase confirmation (v0.3)
 
 A flow is **write-capable** when any step (at any nesting depth) is a POST
 `http_request` or an `mcp_call` to a tool in that server's `allow` list. This is
@@ -127,16 +127,26 @@ computed from the steps — there is no flag to set or forget. Serving semantics
    expiry, plus instructions to call the same tool again with
    `{"confirm": "<token>"}`.
 2. A call with a valid `confirm` resumes execution from the paused step with a
-   fresh flow timeout (the human's deliberation time is not the flow's
-   execution budget) and returns the flow's normal output. Tokens are bound to
-   their flow, deleted on use, and expire silently.
+   fresh flow timeout (deliberation time is not the flow's execution budget)
+   and returns the flow's normal output. The token is single-use, expires
+   silently, and is bound to its flow **and its frozen execution state** — the
+   inputs and every pre-write step result are captured at pause time, so
+   confirmation executes exactly what was proposed and never recomputes reads
+   against changed state.
 3. Write flows advertise an optional `confirm` string parameter in their
    `inputSchema` (this does not count against the 3-parameter limit) and
    `readOnlyHint: false, destructiveHint: true` annotations.
 
-One approval covers one flow run: after confirmation, the remaining steps —
+One confirmation covers one flow run: after it, the remaining steps —
 including multiple writes — execute without further pauses. If per-write
 granularity matters, split the flow.
+
+**What this is, precisely:** a two-phase confirmation protocol, not a
+guaranteed human gate. The caller that receives the token can confirm
+autonomously. The pause is the *surface* where a human gate can be built: an
+MCP host that mediates tool calls can intercept the proposal, show it to a
+person, and only forward the confirmation on their approval. Runtimes must not
+describe this mechanism as "human approval" unless such mediation is in place.
 
 ## Reserved for future versions
 
