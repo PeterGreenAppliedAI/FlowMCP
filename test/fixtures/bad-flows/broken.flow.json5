@@ -1,0 +1,12 @@
+// Invalid on purpose: 4 input params (max 3) and no output field.
+{
+  name: 'broken',
+  description: 'WHEN TO USE: never — this flow is invalid.',
+  input: {
+    a: { type: 'string', description: 'a' },
+    b: { type: 'string', description: 'b' },
+    c: { type: 'string', description: 'c' },
+    d: { type: 'string', description: 'd' },
+  },
+  steps: [{ id: 'noop', kind: 'template', template: 'hi' }],
+}

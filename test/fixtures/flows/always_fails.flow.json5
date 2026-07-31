@@ -1,0 +1,13 @@
+{
+  name: 'always_fails',
+  description: 'WHEN TO USE: never — test flow whose only step returns HTTP 500.',
+  input: {},
+  steps: [
+    {
+      id: 'boom',
+      kind: 'http_request',
+      url: '{{env.FIXTURE_BASE}}/fail',
+    },
+  ],
+  output: '{{steps.boom}}',
+}

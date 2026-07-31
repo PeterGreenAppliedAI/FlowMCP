@@ -1,0 +1,33 @@
+{
+  name: 'hn_top',
+  description: 'WHEN TO USE: the user asks what is on Hacker News right now. Returns the top 5 stories as a markdown list. Takes no parameters.',
+  input: {},
+  steps: [
+    {
+      id: 'hn_ids',
+      kind: 'http_request',
+      url: 'https://hacker-news.firebaseio.com/v0/topstories.json',
+    },
+    {
+      id: 'stories',
+      kind: 'map',
+      over: 'steps.hn_ids[0:5]',
+      as: 'story_id',
+      step: {
+        kind: 'http_request',
+        url: 'https://hacker-news.firebaseio.com/v0/item/{{story_id}}.json',
+      },
+    },
+    {
+      id: 'story_lines',
+      kind: 'map',
+      over: 'steps.stories',
+      as: 'story',
+      step: {
+        kind: 'template',
+        template: '- **{{story.title}}** — {{story.score}} points {{story.url}}',
+      },
+    },
+  ],
+  output: '# Hacker News — top 5\n\n{{steps.story_lines}}',
+}
