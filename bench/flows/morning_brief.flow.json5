@@ -1,0 +1,62 @@
+// Mirror of flows/morning_brief.flow.json5 pointed at the local fixture server.
+{
+  name: 'morning_brief',
+  description: 'WHEN TO USE: test copy of morning_brief against the local fixture server.',
+  input: {
+    city: {
+      type: 'string',
+      description: 'City for the weather section',
+      required: false,
+      default: 'New York',
+    },
+  },
+  env: ['FIXTURE_BASE'],
+  steps: [
+    {
+      id: 'geo',
+      kind: 'http_request',
+      url: '{{env.FIXTURE_BASE}}/v1/search?name={{input.city}}&count=1',
+    },
+    {
+      id: 'place',
+      kind: 'transform',
+      expr: '{ name: steps.geo.results[0].name, country: steps.geo.results[0].country, lat: steps.geo.results[0].latitude, lon: steps.geo.results[0].longitude }',
+    },
+    {
+      id: 'weather',
+      kind: 'http_request',
+      url: '{{env.FIXTURE_BASE}}/v1/forecast?latitude={{steps.place.lat}}&longitude={{steps.place.lon}}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=1',
+    },
+    {
+      id: 'hn_ids',
+      kind: 'http_request',
+      url: '{{env.FIXTURE_BASE}}/v0/topstories.json',
+    },
+    {
+      id: 'stories',
+      kind: 'map',
+      over: 'steps.hn_ids[0:5]',
+      as: 'story_id',
+      step: {
+        kind: 'http_request',
+        url: '{{env.FIXTURE_BASE}}/v0/item/{{story_id}}.json',
+      },
+    },
+    {
+      id: 'story_lines',
+      kind: 'map',
+      over: 'steps.stories',
+      as: 'story',
+      step: {
+        kind: 'template',
+        template: '- **{{story.title}}** — {{story.score}} points {{story.url}}',
+      },
+    },
+    {
+      id: 'render',
+      kind: 'template',
+      template: '# Morning brief — {{steps.place.name}}, {{steps.place.country}}\n\n## Weather today\nHigh {{steps.weather.daily.temperature_2m_max[0]}}°C / low {{steps.weather.daily.temperature_2m_min[0]}}°C, {{steps.weather.daily.precipitation_probability_max[0]}}% chance of rain.\n\n## Top of Hacker News\n{{steps.story_lines}}',
+    },
+  ],
+  output: '{{steps.render}}',
+}
