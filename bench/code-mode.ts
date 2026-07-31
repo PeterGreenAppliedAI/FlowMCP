@@ -17,7 +17,7 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectRoot } from '../test/helpers.js';
-import { PRIMITIVE_TOOLS, RECIPE_TEXT } from './primitive-tools.js';
+import { PRIMITIVE_TOOLS, RECIPE_TEXT, executePrimitiveTool } from './primitive-tools.js';
 
 const GATEWAY = process.env.GATEWAY ?? 'http://10.0.0.20:8001';
 const REQUEST_TIMEOUT_MS = 240_000;
@@ -44,9 +44,18 @@ const TASKS = [
   { id: 'brief_default', prompt: 'Morning brief, please.', score: briefScore },
 ];
 
+// Example return values are generated from the mocks themselves, so the doc's
+// response shapes are truthful. Without them, one-shot code must guess schemas
+// blind — an unfairness the agentic loop doesn't have (it sees every result).
+const SAMPLE_ARGS: Record<string, Record<string, unknown>> = {
+  search_locations: { query: 'Lisbon' },
+  hn_get_item: { id: 101 },
+  get_exchange_rate: { base: 'EUR', quote: 'USD' },
+};
 const API_DOC = PRIMITIVE_TOOLS.map((t) => {
   const props = Object.keys((t.function.parameters as { properties?: Record<string, unknown> }).properties ?? {});
-  return `tools.${t.function.name}({${props.join(', ')}}) — ${t.function.description}`;
+  const example = executePrimitiveTool(t.function.name, SAMPLE_ARGS[t.function.name] ?? { latitude: 1.5, longitude: 2.5 });
+  return `tools.${t.function.name}({${props.join(', ')}}) — ${t.function.description}\n  returns e.g. ${example.slice(0, 140)}`;
 }).join('\n');
 
 const CODE_INSTRUCTIONS =
