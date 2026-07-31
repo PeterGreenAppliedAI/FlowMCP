@@ -1,0 +1,32 @@
+[
+  {
+    "model": "gpu-node/qwen2.5:7b",
+    "condition": "A",
+    "task": "brief_city",
+    "trial": 1,
+    "success": true,
+    "rightFirstTool": true,
+    "rounds": 2,
+    "toolCalls": 1,
+    "badCalls": 0,
+    "promptTokens": 700,
+    "completionTokens": 199,
+    "ms": 2539,
+    "note": ""
+  },
+  {
+    "model": "gpu-node/qwen2.5:7b",
+    "condition": "B",
+    "task": "brief_city",
+    "trial": 1,
+    "success": false,
+    "rightFirstTool": null,
+    "rounds": 2,
+    "toolCalls": 4,
+    "badCalls": 0,
+    "promptTokens": 4152,
+    "completionTokens": 256,
+    "ms": 3439,
+    "note": ""
+  }
+]
