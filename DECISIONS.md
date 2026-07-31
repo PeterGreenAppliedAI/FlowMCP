@@ -2,6 +2,40 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-07-31 — the benchmark's headline statistic was wrong (review round 5)
+
+**What didn't work:** the paired McNemar analysis reported 28:0 discordant pairs.
+An external reviewer ran the arithmetic: A 38/48 and B 5/48 force a discordant
+difference of 33, so 28:0 could not describe all 48 pairs. The cause was in the
+analysis script, not the data — it merged result files in unsorted glob order,
+letting the superseded broken-host gpt-oss runs silently overwrite that model's
+valid wave-3 results. Five A successes vanished.
+
+**The fix:** explicit supersession (sorted timestamps, later waves win). The
+corrected table — 33 discordant pairs, all favoring the façade, exact
+p ≈ 2.3×10⁻¹⁰ — is *stronger* than the buggy one and reconciles exactly with
+the marginals printed beside it.
+
+**The lesson:** analysis scripts deserve the same rigor as product code, and a
+"superseded run" must be an explicit concept in the data model, not an accident
+of file ordering. Also: publish the marginals next to any paired statistic — the
+reviewer caught this precisely because the numbers sat side by side.
+
+## 2026-07-31 — "approval" overclaimed what the mechanism enforces (review round 4)
+
+**What didn't work:** v0.3's write gate was described as an approval gate with
+human-implying language. The mechanism doesn't enforce that: the model receives
+the confirmation token in the tool result and can confirm autonomously.
+
+**The fix:** renamed to what it is — a two-phase confirmation protocol whose
+pause is the *surface* where a host-mediated human gate can be built. FORMAT.md
+now forbids runtimes from calling it "human approval" without host mediation.
+The state-freezing requirement the review demanded (confirmation must never
+recompute against changed pre-write state) was already implemented — the token
+binds to the frozen context — but undocumented; it is now a spec guarantee.
+Same lesson as the annotations entry: never let the language claim more than
+the mechanism computes.
+
 ## 2026-07-31 — downstream launch broke on Windows (review round 3)
 
 **What didn't work:** the pool launched downstream servers with raw `spawn()` and
