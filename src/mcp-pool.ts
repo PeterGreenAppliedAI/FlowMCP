@@ -16,8 +16,12 @@ export const PROTOCOL_REVISIONS = ['2025-03-26', '2025-06-18', '2025-11-25'];
 const NEWEST_PROTOCOL = PROTOCOL_REVISIONS[PROTOCOL_REVISIONS.length - 1]!;
 
 // Baseline env for downstream children when inheritEnv is off: enough to run,
-// nothing that could hold a secret.
-const BASELINE_ENV_KEYS = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'TERM'];
+// nothing that could hold a secret. Windows needs its process-launch machinery
+// (PATHEXT, ComSpec, SystemRoot) and its temp/profile locations.
+const BASELINE_ENV_KEYS =
+  process.platform === 'win32'
+    ? ['PATH', 'PATHEXT', 'COMSPEC', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA']
+    : ['PATH', 'HOME', 'TMPDIR', 'LANG', 'TERM'];
 
 export const serversSchema = z.record(
   z.string().regex(IDENT, 'server name must be snake_case'),
@@ -28,6 +32,9 @@ export const serversSchema = z.record(
       env: z.record(z.string()).default({}), // values may use {{env.X}} — never inline secrets
       allow: z.array(z.string()).default([]), // non-read-only tools callable by this server's flows
       inheritEnv: z.boolean().default(false), // opt-in: pass the full parent environment through
+      // Opt-in: launch via the system shell. Required on Windows for .cmd shims
+      // like npx (raw spawn cannot exec them); servers.json5 is operator-trusted.
+      shell: z.boolean().default(false),
     })
     .strict(),
 );
@@ -129,7 +136,10 @@ class DownstreamServer {
     for (const [key, value] of Object.entries(this.config.env)) {
       env[key] = interpolate(value, { env: process.env });
     }
-    const child = spawn(this.config.command, this.config.args, { env });
+    const child = spawn(this.config.command, this.config.args, {
+      env,
+      shell: this.config.shell,
+    });
     this.child = child;
     child.stdin.on('error', () => {}); // EPIPE surfaces via the exit handler instead
     child.on('error', (e) => this.teardown(`failed to start: ${e.message}`));

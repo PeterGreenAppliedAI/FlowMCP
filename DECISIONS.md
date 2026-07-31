@@ -2,6 +2,22 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-07-31 — downstream launch broke on Windows (review round 3)
+
+**What didn't work:** the pool launched downstream servers with raw `spawn()` and
+a POSIX-only minimal environment. On Windows, `npx` is a `.cmd` shim, and Node
+refuses to exec `.cmd`/`.bat` without a shell (the CVE-2024-27980 fix) — so the
+README's own `command: 'npx'` example returned ENOENT. The minimal env also
+stripped `PATHEXT`, `ComSpec`, `SystemRoot`, `TEMP`/`TMP`, without which Windows
+can't launch much of anything. Developed and CI-tested on Linux only; the platform
+assumption was invisible until someone smoke-tested on Windows.
+
+**The fix:** a `shell: true` opt-in per server (default false) — acceptable
+because servers.json5 is operator-trusted config, and documented as the Windows
+knob for `.cmd` shims; a platform-aware baseline env that includes the Windows
+launch machinery; and `windows-latest` added to the CI matrix so the platform
+assumption can't silently return.
+
 ## 2026-07-31 — advertised read-only while permitting an allowlisted write (review round 2)
 
 **What didn't work:** every flow was published with a blanket

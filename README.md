@@ -103,9 +103,12 @@ Flows can call tools on *other* MCP servers — and this is where the thesis bec
     args: ['-y', '@modelcontextprotocol/server-github'],
     env: { GITHUB_TOKEN: '{{env.GITHUB_TOKEN}}' },  // interpolated — never inline secrets
     allow: [],                                       // non-read-only tools need explicit listing
+    shell: true,                                     // Windows: npx is a .cmd shim — raw spawn can't exec it
   },
 }
 ```
+
+(`shell` defaults to false. On Windows, `.cmd` shims like `npx` need `shell: true` — or point `command` directly at a Node entry point. `servers.json5` is operator-trusted config, so the shell opt-in is a portability knob, not an injection surface.)
 
 Then use an `mcp_call` step like any other:
 
