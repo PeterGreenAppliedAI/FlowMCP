@@ -2,6 +2,32 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-07-31 — retry-on-network-error could double a POST (external review catch)
+
+**What didn't work:** the http_request step retried once on any network failure,
+regardless of method. A timed-out POST is not a failed POST — the request may have
+reached the server before the timeout fired, so the retry could perform the write
+twice. "Read-only by doctrine" was a comment, not a mechanism. Caught by an
+external review (ChatGPT) of v0.1; the schema happily accepted a POST flow.
+
+**The fix:** retries are now GET-only. POST fails on the first network error and
+the flow reports it. Full side-effect classification (destructive hints, approval
+steps, idempotency keys) stays in the v2 write-flows design where it belongs.
+
+## 2026-07-31 — flows could read all of process.env
+
+**What didn't work:** `{{env.X}}` resolved against the entire process environment,
+so any flow file you loaded could read any secret the server process held and send
+it to any URL it named. "No code execution" was true and insufficient — a flow
+file is a program, and it ran with the server's full ambient authority. Same
+external review.
+
+**The fix:** flows must declare the env vars they use (`env: ['API_KEY']`);
+undeclared vars resolve as absent. Least privilege by construction, checked by an
+engine test that plants a SECRET in the environment and asserts the flow can't see
+it. The trust model is now written down in the README: flow files are trusted
+programs — review them like code.
+
 ## 2026-07-31 — `&` in a parameter value broke the query string
 
 **What didn't work:** relying on `new URL()` normalization to clean up interpolated

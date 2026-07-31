@@ -62,6 +62,19 @@ describe('loadFlows', () => {
     await expect(loadFlows(dir)).rejects.toThrow(/duplicate step id 'x'/);
   });
 
+  it('rejects a default whose type contradicts the declared type', async () => {
+    const dir = await flowDir({
+      'mismatch.flow.json5': `{
+        name: 'mismatch',
+        description: 'WHEN TO USE: test.',
+        input: { n: { type: 'string', description: 'n', default: 42 } },
+        steps: [{ id: 'out', kind: 'template', template: '{{input.n}}' }],
+        output: '{{steps.out}}',
+      }`,
+    });
+    await expect(loadFlows(dir)).rejects.toThrow(/default value must match the declared type/);
+  });
+
   it('rejects a missing directory', async () => {
     await expect(loadFlows('/nonexistent/flows')).rejects.toThrow(/not found/);
   });

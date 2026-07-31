@@ -11,7 +11,10 @@ import { McpPool } from './mcp-pool.js';
 import type { Flow } from './flow-schema.js';
 
 const VERSION = '0.2.0';
-const PROTOCOL_VERSION = '2025-03-26';
+// Our surface (initialize / tools/list / tools/call / ping) is unchanged across
+// these revisions; echo the client's requested version when we know it.
+const SUPPORTED_PROTOCOLS = new Set(['2025-03-26', '2025-06-18', '2025-11-25']);
+const DEFAULT_PROTOCOL = '2025-03-26';
 
 interface ServerState {
   flows: Flow[];
@@ -54,7 +57,8 @@ function toolsList(flows: Flow[]): Record<string, unknown> {
         name: flow.name,
         description: flow.description,
         inputSchema: { type: 'object', properties, ...(required.length ? { required } : {}) },
-        annotations: { readOnlyHint: true }, // v1 doctrine: all flows are read-only
+        // Flow doctrine, machine-readable: read-only, non-destructive, reaches the open web.
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       };
     }),
   };
@@ -90,12 +94,17 @@ class MethodError extends Error {
 async function dispatch(state: ServerState, req: JsonRpcRequest): Promise<unknown> {
   const params = req.params ?? {};
   switch (req.method) {
-    case 'initialize':
+    case 'initialize': {
+      const requested = params.protocolVersion;
       return {
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion:
+          typeof requested === 'string' && SUPPORTED_PROTOCOLS.has(requested)
+            ? requested
+            : DEFAULT_PROTOCOL,
         capabilities: { tools: {} },
         serverInfo: { name: 'flowmcp', version: VERSION },
       };
+    }
     case 'ping':
       return {};
     case 'tools/list':
@@ -128,6 +137,10 @@ async function main(): Promise<void> {
   } catch (e) {
     log(`startup failed: ${e instanceof Error ? e.message : e}`);
     process.exit(1);
+  }
+  if (process.argv.includes('--validate')) {
+    log('flows valid');
+    process.exit(0);
   }
 
   const rl = createInterface({ input: process.stdin });

@@ -10,7 +10,11 @@ const paramSchema = z
     required: z.boolean().default(false),
     default: z.union([z.string(), z.number(), z.boolean()]).optional(),
   })
-  .strict();
+  .strict()
+  .refine((p) => p.default === undefined || typeof p.default === p.type, {
+    message: 'default value must match the declared type',
+    path: ['default'],
+  });
 
 const httpFields = {
   method: z.enum(['GET', 'POST']).default('GET'),
@@ -98,6 +102,9 @@ export const flowSchema = z
       .default({})
       .refine((p) => Object.keys(p).length <= 3, 'flows take at most 3 input parameters')
       .refine((p) => Object.keys(p).every((k) => !RESERVED.has(k)), 'parameter name is reserved'),
+    // Least privilege: only env vars declared here are visible to the flow's
+    // {{env.X}} interpolations; everything else resolves as absent.
+    env: z.array(z.string().min(1)).default([]),
     steps: z.array(stepSchema).min(1),
     output: z.string().min(1),
   })

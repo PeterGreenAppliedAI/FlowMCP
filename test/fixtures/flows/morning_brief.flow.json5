@@ -10,6 +10,7 @@
       default: 'New York',
     },
   },
+  env: ['FIXTURE_BASE'],
   steps: [
     {
       id: 'geo',

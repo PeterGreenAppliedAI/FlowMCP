@@ -62,7 +62,27 @@ describe('MCP protocol over stdio', () => {
       type: 'object',
       properties: { city: { type: 'string', description: 'City for the weather section' } },
     });
-    expect(brief.annotations).toEqual({ readOnlyHint: true });
+    expect(brief.annotations).toEqual({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    });
+  });
+
+  it('echoes a supported requested protocolVersion (negotiation)', async () => {
+    const res = await client.request('initialize', { protocolVersion: '2025-11-25' });
+    expect((res.result as { protocolVersion: string }).protocolVersion).toBe('2025-11-25');
+    const unknown = await client.request('initialize', { protocolVersion: '1999-01-01' });
+    expect((unknown.result as { protocolVersion: string }).protocolVersion).toBe('2025-03-26');
+  });
+
+  it('--validate checks the flow directory and exits 0 without serving', async () => {
+    const child = spawnServer(flowsDir, {}, ['--validate']);
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+    const code = await new Promise<number | null>((resolve) => child.on('exit', resolve));
+    expect(code).toBe(0);
+    expect(stderr).toContain('flows valid');
   });
 
   it('runs morning_brief end to end against fixtures', async () => {

@@ -32,9 +32,13 @@ export async function executeFlow(
   args: Record<string, unknown>,
   opts: EngineOptions = {},
 ): Promise<string> {
+  // Flows see only the env vars they declared — never all of process.env.
+  const envSource = opts.env ?? process.env;
+  const env: Record<string, string | undefined> = {};
+  for (const key of flow.env) env[key] = envSource[key];
   const ctx: FlowContext = {
     input: coerceInput(flow, args),
-    env: opts.env ?? process.env,
+    env,
     steps: {},
   };
   const deadline = Date.now() + (opts.flowTimeoutMs ?? FLOW_TIMEOUT_MS);
@@ -162,8 +166,12 @@ async function runHttp(step: HttpStep, ctx: FlowContext, deadline: number): Prom
   try {
     return await attempt();
   } catch (e) {
-    // One retry, but only for network-level failures — not HTTP error statuses.
-    if (e instanceof TypeError || (e instanceof Error && e.name === 'TimeoutError')) {
+    // One retry for network-level failures — GET only. A timed-out POST may have
+    // landed on the server; retrying it risks a duplicate write.
+    if (
+      step.method === 'GET' &&
+      (e instanceof TypeError || (e instanceof Error && e.name === 'TimeoutError'))
+    ) {
       return attempt();
     }
     throw e;

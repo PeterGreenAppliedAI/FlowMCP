@@ -56,11 +56,16 @@ export async function startFixtureServer(): Promise<FixtureServer> {
 export function spawnServer(
   flowsDir: string,
   env: Record<string, string> = {},
+  extraArgs: string[] = [],
 ): ChildProcessWithoutNullStreams {
-  return spawn(process.execPath, ['--import', 'tsx', 'src/server.ts', '--flows', flowsDir], {
-    cwd: projectRoot,
-    env: { ...process.env, ...env },
-  });
+  return spawn(
+    process.execPath,
+    ['--import', 'tsx', 'src/server.ts', '--flows', flowsDir, ...extraArgs],
+    {
+      cwd: projectRoot,
+      env: { ...process.env, ...env },
+    },
+  );
 }
 
 interface RpcResponse {

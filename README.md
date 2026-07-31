@@ -49,16 +49,19 @@ Flows are data, not code. The server loads every `flows/*.flow.json5` at startup
   input: {                        // 0–3 parameters, no more
     city: { type: 'string', description: 'City for the weather', required: false, default: 'New York' },
   },
+  env: ['WEATHER_API_KEY'],       // ONLY these env vars are visible to {{env.X}} — least privilege
   steps: [ /* run in order; each result is available as steps.<id> */ ],
   output: '{{steps.render}}',     // the tool's text result
 }
 ```
 
+Check a directory without serving: `npm start -- --flows ./my-flows --validate` exits 0 if every flow is valid, 1 with the file and field otherwise.
+
 ### Step kinds
 
 | kind | fields | what it does |
 |------|--------|--------------|
-| `http_request` | `method` (GET/POST), `url`, `headers?`, `body?`, `timeoutMs?` (default 15000) | Fetch a URL; JSON responses are parsed. One automatic retry on network error. |
+| `http_request` | `method` (GET/POST), `url`, `headers?`, `body?`, `timeoutMs?` (default 15000) | Fetch a URL; JSON responses are parsed. One automatic retry on network error — **GET only**: a timed-out POST may have landed, so it is never retried. |
 | `transform` | `expr` | Reshape prior results with a sandboxed expression — paths, object/array literals, comparisons. No code execution. |
 | `template` | `template` | Mustache-style string build: `{{steps.x.y[0]}}`. Arrays join line-per-item; missing terminal values render as `''`. |
 | `map` | `over`, `as?` (default `item`), `step` | Run one leaf step per array element, sequentially, **max 10 items** — slice with `steps.ids[0:5]`. |
@@ -120,6 +123,10 @@ Rules of engagement:
 - **The step timeout covers spawn + handshake + call** as one unit, bounded by the flow's 60s deadline — a slow cold-start can't invisibly eat the budget.
 - **Results are capped** at `maxResultChars` (default 8K) — downstream verbosity is not your flow's problem to inherit. JSON text results are parsed so later steps can path into them.
 
+## Trust model
+
+Flow files are **trusted programs** — treat them like code, review them like code. The expression language can't execute code, but a flow can still send data to any URL it names; what bounds the blast radius is what the flow can *see*: only the env vars it declares in `env: [...]` (never all of `process.env`), only the 0–3 inputs it declares, and only downstream MCP tools that are read-only or explicitly allowlisted. `servers.json5` is operator configuration, same trust level as the server's own command line. Don't load flow files you haven't read.
+
 ## Design constraints (on purpose)
 
 - **Hand-rolled protocol**, ~150 lines: `initialize`, `tools/list`, `tools/call`, `ping` over newline-delimited JSON-RPC on stdio. No MCP SDK — the server is small enough to audit in one sitting.
@@ -132,6 +139,9 @@ Rules of engagement:
 
 - Write-action flows with approval/confirm steps
 - A versioned FORMAT.md — the flow file as a portable, agent-agnostic contract
+- MCP conformance matrix (Inspector-based CI against current protocol revisions)
+- A benchmark: FlowMCP vs. a 30–40-tool primitive server across 7B/30B/frontier models — completion rate, argument accuracy, tokens, tool-call count
+- Destination allowlists and HTTPS policy for `http_request`
 - HTTP transport for the server itself
 - Flow hot-reload
 

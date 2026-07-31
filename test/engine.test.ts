@@ -184,6 +184,15 @@ describe('executeFlow', () => {
     expect(await executeFlow(flow, { n: 2 })).toBe('small (else)');
   });
 
+  it('exposes only declared env vars to the flow (least privilege)', async () => {
+    const flow = makeFlow({
+      env: ['ALLOWED'],
+      steps: [{ id: 'out', kind: 'template', template: '[{{env.ALLOWED}}][{{env.SECRET}}]' }],
+    });
+    const result = await executeFlow(flow, {}, { env: { ALLOWED: 'yes', SECRET: 'nope' } });
+    expect(result).toBe('[yes][]');
+  });
+
   it('wraps step failures in FlowError with the step id', async () => {
     const flow = makeFlow({
       steps: [{ id: 'bad', kind: 'transform', expr: 'steps.nothing.here' }],
