@@ -1,0 +1,11 @@
+{
+  name: 'erp_orders',
+  description: 'WHEN TO USE: test — paginated reads chained via nextPage ref.',
+  input: {},
+  steps: [
+    { id: 'p1', kind: 'mcp_call', server: 'erp', tool: 'list_orders', args: { page: '1' } },
+    { id: 'p2', kind: 'mcp_call', server: 'erp', tool: 'list_orders', args: { page: '{{steps.p1.nextPage}}' } },
+    { id: 'render', kind: 'template', template: 'orders: {{steps.p1.orders[0].id}} {{steps.p1.orders[1].id}} {{steps.p2.orders[0].id}} {{steps.p2.orders[1].id}} (next: {{steps.p2.nextPage}})' },
+  ],
+  output: '{{steps.render}}',
+}

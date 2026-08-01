@@ -15,7 +15,14 @@ const INVOICES = [
   { id: 'INV-91', customer: 'C002', amount: 310.0, daysOverdue: 12 },
 ];
 
+const ORDERS = [
+  { id: 'SO-1', status: 'open' }, { id: 'SO-2', status: 'open' },
+  { id: 'SO-3', status: 'shipped' }, { id: 'SO-4', status: 'open' },
+];
+
 const TOOLS = [
+  { name: 'list_orders', description: 'List sales orders, paginated (2 per page)', inputSchema: { type: 'object', properties: { page: { type: 'number' } } } },
+  { name: 'flaky_500', description: 'Backend that is currently broken', inputSchema: { type: 'object', properties: {} } },
   { name: 'list_customers', description: 'List all customers', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_customer', description: 'Get one customer by id', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
   { name: 'list_overdue_invoices', description: 'Invoices overdue by at least N days', inputSchema: { type: 'object', properties: { days: { type: 'number' } } } },
@@ -37,6 +44,11 @@ function call(name: string, args: Record<string, unknown>): { text: string; isEr
       return { text: JSON.stringify({ invoices: INVOICES.filter((i) => i.daysOverdue >= days) }) };
     }
     case 'create_order': return { text: JSON.stringify({ ok: true, order: 'SO-1001' }) };
+    case 'list_orders': {
+      const page = Number(args.page ?? 1);
+      const slice = ORDERS.slice((page - 1) * 2, page * 2);
+      return { text: JSON.stringify({ orders: slice, nextPage: page * 2 < ORDERS.length ? page + 1 : null }) };
+    }
     case 'post_invoice':
       postedInvoices++;
       return { text: JSON.stringify({ ok: true, posted: args.id, totalPosted: postedInvoices }) };
@@ -51,6 +63,7 @@ const server = createServer((req, res) => {
     return;
   }
   if (req.method !== 'POST') { res.statusCode = 405; res.end(); return; }
+  if (req.headers.authorization === 'Bearer expired-token') { res.statusCode = 403; res.end('token expired'); return; }
   if (req.headers.authorization !== `Bearer ${TOKEN}`) { res.statusCode = 401; res.end('unauthorized'); return; }
   let body = '';
   req.on('data', (c) => (body += c));
@@ -67,6 +80,7 @@ const server = createServer((req, res) => {
     } else if (msg.method === 'tools/list') {
       reply({ tools: TOOLS }); // deliberately NO annotations — production reality
     } else if (msg.method === 'tools/call') {
+      if (msg.params?.name === 'flaky_500') { res.statusCode = 500; res.end('internal error'); return; }
       const r = call(msg.params?.name ?? '', msg.params?.arguments ?? {});
       reply({ content: [{ type: 'text', text: r.text }], ...(r.isError ? { isError: true } : {}) });
     } else {

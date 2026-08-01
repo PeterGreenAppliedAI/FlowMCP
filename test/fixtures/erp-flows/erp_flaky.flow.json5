@@ -1,0 +1,7 @@
+{
+  name: 'erp_flaky',
+  description: 'WHEN TO USE: test — downstream 500 must surface as a clear step failure.',
+  input: {},
+  steps: [{ id: 'boom', kind: 'mcp_call', server: 'erp', tool: 'flaky_500' }],
+  output: '{{steps.boom}}',
+}

@@ -1,0 +1,10 @@
+{
+  name: 'erp_empty',
+  description: 'WHEN TO USE: test — empty result set: reading through it fails loudly with the path.',
+  input: {},
+  steps: [
+    { id: 'inv', kind: 'mcp_call', server: 'erp', tool: 'list_overdue_invoices', args: { days: '2000' } },
+    { id: 'render', kind: 'template', template: 'first: {{steps.inv.invoices[0].id}}' },
+  ],
+  output: '{{steps.render}}',
+}

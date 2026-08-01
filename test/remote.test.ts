@@ -125,6 +125,33 @@ describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
     bad.close();
   });
 
+  it('chains paginated reads via nextPage refs', async () => {
+    const res = await client.request('tools/call', { name: 'erp_orders' });
+    expect(isError(res)).toBeUndefined();
+    expect(text(res)).toBe('orders: SO-1 SO-2 SO-3 SO-4 (next: )');
+  });
+
+  it('surfaces a downstream 500 as a clear step failure', async () => {
+    const res = await client.request('tools/call', { name: 'erp_flaky' });
+    expect(isError(res)).toBe(true);
+    expect(text(res)).toContain("failed at step 'boom'");
+  });
+
+  it('fails loudly with the path on empty result sets', async () => {
+    const res = await client.request('tools/call', { name: 'erp_empty' });
+    expect(isError(res)).toBe(true);
+    expect(text(res)).toMatch(/cannot read .* of undefined .*invoices/);
+  });
+
+  it('surfaces 403 (expired token) distinctly', async () => {
+    const bad = new RpcClient(spawnServer(flowsDir, { ERP_URL: erpUrl, ERP_TOKEN: 'expired-token' }));
+    await bad.request('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
+    const res = await bad.request('tools/call', { name: 'erp_report' });
+    expect(isError(res)).toBe(true);
+    expect(text(res)).toMatch(/403|expired/i);
+    bad.close();
+  });
+
   it('surfaces auth failures instead of masking them', async () => {
     const bad = new RpcClient(spawnServer(flowsDir, { ERP_URL: erpUrl, ERP_TOKEN: 'wrong-token' }));
     await bad.request('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
