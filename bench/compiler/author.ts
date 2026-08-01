@@ -13,14 +13,13 @@
 // → compile to a candidate flow with provenance → --validate. Review remains
 // human. Env: GATEWAY (model endpoint), plus whatever the servers need.
 
-import { spawn, spawnSync, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import { loadServers } from '../../src/loader.js';
-import { streamableHttpRequest, type HttpTarget } from '../../src/mcp-pool.js';
-import { interpolate } from '../../src/interpolate.js';
+import { createDownstreamClient } from '../../src/downstream.js';
 import { compile } from './compile.js';
 import { projectRoot } from '../../test/helpers.js';
 
@@ -51,72 +50,34 @@ const probes: Array<{ tool: string; args: Record<string, unknown> }> = flags('--
   return { tool: p.slice(0, idx), args: JSON.parse(p.slice(idx + 1)) as Record<string, unknown> };
 });
 
-// ---- minimal MCP introspection (read-only tools only) ----
-interface Rpc { id: number; result?: Record<string, unknown>; error?: { message?: string } }
-class Client {
-  private nextId = 1;
-  private pending = new Map<number, (m: Rpc) => void>();
-  private buffer = '';
-  constructor(private child: ChildProcessWithoutNullStreams) {
-    child.stdout.on('data', (c: Buffer) => {
-      this.buffer += c.toString();
-      let i: number;
-      while ((i = this.buffer.indexOf('\n')) !== -1) {
-        const line = this.buffer.slice(0, i); this.buffer = this.buffer.slice(i + 1);
-        if (!line.trim()) continue;
-        try { const m = JSON.parse(line) as Rpc; this.pending.get(m.id)?.(m); this.pending.delete(m.id); } catch { /* noise */ }
-      }
-    });
-    child.stderr.on('data', () => {});
-  }
-  request(method: string, params: Record<string, unknown> = {}): Promise<Rpc> {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error(`timeout: ${method}`)), 30_000);
-      this.pending.set(id, (m) => { clearTimeout(t); resolve(m); });
-      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-    });
-  }
-  kill(): void { this.child.kill(); }
-}
-
+// ---- introspection via the shared DownstreamClient (read-only tools only) ----
 interface ToolDoc { name: string; server: string; description: string; params: string[]; example?: string }
 
 async function introspect(): Promise<ToolDoc[]> {
   const configs = await loadServers(serversDir);
   const docs: ToolDoc[] = [];
+  const dl = () => Date.now() + 30_000;
   for (const [serverName, config] of Object.entries(configs)) {
-    let rpc: (method: string, params?: Record<string, unknown>) => Promise<Rpc>;
-    let kill = () => {};
-    if (config.url) {
-      const target: HttpTarget = {
-        url: interpolate(config.url, { env: process.env }),
-        headers: Object.fromEntries(Object.entries(config.headers).map(([k, v]) => [k, interpolate(v, { env: process.env })])),
+    const client = createDownstreamClient(serverName, config);
+    await client.connect(dl());
+    const listed = await client.listTools(dl());
+    for (const t of listed) {
+      if (t.annotations?.readOnlyHint !== true && !config.attestReadOnly.includes(t.name)) continue;
+      const doc: ToolDoc = {
+        name: t.name,
+        server: serverName,
+        description: t.description ?? '',
+        params: Object.keys((t.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}),
       };
-      let nextId = 1;
-      rpc = async (method, params = {}) =>
-        ((await streamableHttpRequest(target, { jsonrpc: '2.0', id: nextId++, method, params }, 30_000)) ?? {}) as unknown as Rpc;
-    } else {
-      const env: Record<string, string | undefined> = { PATH: process.env.PATH, HOME: process.env.HOME };
-      for (const [k, v] of Object.entries(config.env)) env[k] = interpolate(v, { env: process.env });
-      const client = new Client(spawn(config.command!, config.args, { env, shell: config.shell }));
-      rpc = (method, params = {}) => client.request(method, params);
-      kill = () => client.kill();
-    }
-    await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
-    const listed = await rpc('tools/list');
-    for (const t of (listed.result?.tools ?? []) as Array<{ name: string; description?: string; inputSchema?: { properties?: Record<string, unknown> }; annotations?: { readOnlyHint?: boolean } }>) {
-      if (t.annotations?.readOnlyHint !== true && !config.readOnly.includes(t.name)) continue;
-      const doc: ToolDoc = { name: t.name, server: serverName, description: t.description ?? '', params: Object.keys(t.inputSchema?.properties ?? {}) };
       const probe = probes.find((p) => p.tool === t.name);
       if (probe) {
-        const res = await rpc('tools/call', { name: t.name, arguments: probe.args });
-        const text = ((res.result as { content?: Array<{ text?: string }> })?.content ?? []).map((c) => c.text).join('');
+        const res = await client.callTool(t.name, probe.args, dl());
+        const text = (res.content ?? []).map((c) => c.text ?? '').join('');
         doc.example = text.slice(0, 400);
       }
       docs.push(doc);
     }
-    kill();
+    client.close();
   }
   return docs;
 }

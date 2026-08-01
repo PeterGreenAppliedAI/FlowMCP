@@ -101,15 +101,17 @@ it will eventually be a lie.
 
 Composition config lives beside the flows. Each entry uses exactly one
 transport: **stdio** (`command`, `args?`, `env?`, `inheritEnv?`, `shell?`) or
-**Streamable HTTP** (EXPERIMENTAL in 0.4 — minimal client, pending a full transport implementation) (`url`, `headers?` — both may interpolate `{{env.X}}`, so
+**Streamable HTTP** (`url`, `headers?` — connected via the official MCP SDK's reference client transport, pinned to its v1 line — both may interpolate `{{env.X}}`, so
 auth tokens live in the environment, never in files). Stdio children get a
 minimal baseline environment plus configured vars (`inheritEnv: true` is an
 explicit opt-in).
 
 Tool admission is fail-closed, three ways in: a tool is callable iff it
 declares `annotations.readOnlyHint: true`, OR the operator attests it as a
-read in `readOnly: [...]` (for the many production servers that annotate
-nothing — attested tools are NOT counted write-capable), OR it is named in
+read in `attestReadOnly: [...]` (a security assertion for the many production
+servers that annotate nothing — attested tools are NOT counted write-capable;
+`attestReadOnly` and `allow` must be disjoint, and attested names that do not
+exist on the server fail loudly at connect time), OR it is named in
 `allow: [...]` (write-capable: makes containing flows non-read-only and
 gated). This file is operator-trusted configuration — same trust level as the
 server's own command line.

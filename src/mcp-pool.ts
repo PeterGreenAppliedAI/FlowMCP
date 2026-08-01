@@ -1,109 +1,69 @@
-// Client-side pool of downstream MCP servers for composition (mcp_call steps).
+// Pool of downstream MCP servers for composition (mcp_call steps).
 //
-// Lifecycle per downstream server: spawn lazily on first use, keep the child
-// alive across calls, respawn on crash (3 attempts, then a 5s backoff gate),
-// shut down after 5 minutes idle. One protocol session per child, not per flow.
+// The pool owns LIFECYCLE POLICY: lazy connect on first use, kept-alive
+// sessions, reconnect on unexpected death (3 attempts, then a 5s backoff
+// gate), idle teardown after 5 minutes. Transport lives behind the narrow
+// DownstreamClient interface (src/downstream.ts): stdio is hand-rolled,
+// Streamable HTTP uses the reference SDK client — SDK types never reach here.
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { z } from 'zod';
-import { interpolate } from './interpolate.js';
+import {
+  createDownstreamClient,
+  type DownstreamClient,
+  type DownstreamTool,
+  type McpResult,
+} from './downstream.js';
+
+export { PROTOCOL_REVISIONS } from './downstream.js';
+export type { McpResult } from './downstream.js';
 
 const IDENT = /^[a-z][a-z0-9_]*$/;
 
-// Protocol revisions this codebase's four-method surface is unchanged across.
-// The downstream client initiates with the newest and accepts any of them.
-export const PROTOCOL_REVISIONS = ['2025-03-26', '2025-06-18', '2025-11-25'];
-const NEWEST_PROTOCOL = PROTOCOL_REVISIONS[PROTOCOL_REVISIONS.length - 1]!;
+const policyFields = {
+  // Write-capable tools callable by this server's flows (two-phase gated).
+  allow: z.array(z.string()).default([]),
+  // Operator SECURITY ASSERTION: these unannotated tools are reads. Callable,
+  // and never counted write-capable. Unknown names fail at connect time.
+  attestReadOnly: z.array(z.string()).default([]),
+};
 
-// Baseline env for downstream children when inheritEnv is off: enough to run,
-// nothing that could hold a secret. Windows needs its process-launch machinery
-// (PATHEXT, ComSpec, SystemRoot) and its temp/profile locations.
-const BASELINE_ENV_KEYS =
-  process.platform === 'win32'
-    ? ['PATH', 'PATHEXT', 'COMSPEC', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA']
-    : ['PATH', 'HOME', 'TMPDIR', 'LANG', 'TERM'];
+const stdioServerSchema = z
+  .object({
+    transport: z.literal('stdio').default('stdio'),
+    command: z.string().min(1),
+    args: z.array(z.string()).default([]),
+    env: z.record(z.string()).default({}), // values may use {{env.X}} — never inline secrets
+    inheritEnv: z.boolean().default(false),
+    shell: z.boolean().default(false), // Windows .cmd shims need the shell
+    ...policyFields,
+  })
+  .strict();
 
-export const serversSchema = z.record(
-  z.string().regex(IDENT, 'server name must be snake_case'),
-  z
-    .object({
-      // Local transport: spawn a stdio child.
-      command: z.string().min(1).optional(),
-      args: z.array(z.string()).default([]),
-      env: z.record(z.string()).default({}), // values may use {{env.X}} — never inline secrets
-      // Remote transport: Streamable HTTP endpoint. Exactly one of command|url.
-      url: z.string().min(1).optional(),
-      headers: z.record(z.string()).default({}), // values may use {{env.X}} (auth tokens)
-      allow: z.array(z.string()).default([]), // write-capable tools callable by this server's flows
-      // Operator attestation: these tools ARE reads even though the server does
-      // not annotate them. Callable, and NOT counted as write-capable.
-      readOnly: z.array(z.string()).default([]),
-      inheritEnv: z.boolean().default(false), // opt-in: pass the full parent environment through
-      // Opt-in: launch via the system shell. Required on Windows for .cmd shims
-      // like npx (raw spawn cannot exec them); servers.json5 is operator-trusted.
-      shell: z.boolean().default(false),
-    })
-    .strict()
-    .refine((c) => (c.command !== undefined) !== (c.url !== undefined), {
-      message: "exactly one of 'command' (stdio) or 'url' (Streamable HTTP) is required",
-    }),
-);
+const httpServerSchema = z
+  .object({
+    transport: z.literal('http'),
+    url: z.string().min(1), // may use {{env.X}}
+    headers: z.record(z.string()).default({}), // values may use {{env.X}} (auth tokens)
+    ...policyFields,
+  })
+  .strict();
 
-export type ServerConfig = z.infer<typeof serversSchema>[string];
-
-// Minimal Streamable HTTP client: POST one JSON-RPC message, accept either a
-// direct JSON response or an SSE stream containing the response message.
-// Captures/propagates the mcp-session-id header via the mutable target.
-export interface HttpTarget { url: string; headers: Record<string, string>; sessionId?: string }
-
-export async function streamableHttpRequest(
-  target: HttpTarget,
-  message: Record<string, unknown>,
-  timeoutMs: number,
-): Promise<Record<string, unknown> | undefined> {
-  const res = await fetch(target.url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      ...(target.sessionId ? { 'mcp-session-id': target.sessionId } : {}),
-      ...target.headers,
+const serverEntry = z
+  .preprocess(
+    (raw) => {
+      if (raw && typeof raw === 'object' && !('transport' in raw)) {
+        return { ...raw, transport: 'url' in raw ? 'http' : 'stdio' };
+      }
+      return raw;
     },
-    body: JSON.stringify(message),
-    signal: AbortSignal.timeout(timeoutMs),
+    z.discriminatedUnion('transport', [stdioServerSchema, httpServerSchema]),
+  )
+  .refine((c) => c.allow.every((t) => !c.attestReadOnly.includes(t)), {
+    message: "'allow' and 'attestReadOnly' must be disjoint — a tool is a read or a write, not both",
   });
-  const session = res.headers.get('mcp-session-id');
-  if (session) target.sessionId = session;
-  if (res.status === 202) return undefined; // accepted notification
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const ct = res.headers.get('content-type') ?? '';
-  const body = await res.text();
-  if (ct.includes('text/event-stream')) {
-    for (const line of body.split('\n')) {
-      if (!line.startsWith('data:')) continue;
-      const msg = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
-      if (msg.id === message.id) return msg;
-    }
-    throw new Error('SSE stream ended without a response message');
-  }
-  return body.trim() ? (JSON.parse(body) as Record<string, unknown>) : undefined;
-}
 
-interface DownstreamTool {
-  name: string;
-  annotations?: { readOnlyHint?: boolean };
-}
-
-export interface McpResult {
-  content?: Array<{ type: string; text?: string }>;
-  structuredContent?: unknown;
-  isError?: boolean;
-}
-
-interface Pending {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-}
+export const serversSchema = z.record(z.string().regex(IDENT, 'server name must be snake_case'), serverEntry);
+export type ServerConfig = z.infer<typeof serverEntry>;
 
 export interface PoolOptions {
   idleMs?: number;
@@ -112,13 +72,9 @@ export interface PoolOptions {
 }
 
 class DownstreamServer {
-  private child?: ChildProcessWithoutNullStreams;
-  private http?: HttpTarget;
+  private client?: DownstreamClient;
   private ready = false;
   private tools = new Map<string, DownstreamTool>();
-  private pending = new Map<number, Pending>();
-  private nextId = 1;
-  private buffer = '';
   private connecting?: Promise<void>;
   private blockedUntil = 0;
   private idleTimer?: NodeJS.Timeout;
@@ -135,16 +91,16 @@ class DownstreamServer {
     if (!info) throw new Error(`server '${this.name}' has no tool '${tool}'`);
     const admitted =
       info.annotations?.readOnlyHint === true ||
-      this.config.readOnly.includes(tool) ||
+      this.config.attestReadOnly.includes(tool) ||
       this.config.allow.includes(tool);
     if (!admitted) {
       throw new Error(
         `tool '${tool}' on server '${this.name}' is not marked read-only ` +
-          `(annotations.readOnlyHint), not attested in 'readOnly', and not in its allow list — ` +
+          `(annotations.readOnlyHint), not attested in 'attestReadOnly', and not in its allow list — ` +
           `flows are read-only by default`,
       );
     }
-    const result = (await this.request('tools/call', { name: tool, arguments: args }, deadline)) as McpResult;
+    const result = await this.client!.callTool(tool, args, deadline);
     this.touchIdle();
     return result;
   }
@@ -161,13 +117,30 @@ class DownstreamServer {
 
   private async doConnect(deadline: number): Promise<void> {
     if (Date.now() < this.blockedUntil) {
-      throw new Error(`server '${this.name}' is in respawn backoff after repeated start failures`);
+      throw new Error(`server '${this.name}' is in reconnect backoff after repeated failures`);
     }
     const attempts = this.opts.spawnAttempts ?? 3;
     let lastError: unknown;
     for (let i = 0; i < attempts; i++) {
       try {
-        await this.spawnAndHandshake(deadline);
+        const client = createDownstreamClient(this.name, this.config);
+        client.onClose = () => this.teardown('connection lost');
+        await client.connect(deadline);
+        const tools = await client.listTools(deadline);
+        // connect-time attestation validation: a misspelled or vanished
+        // attested tool is a configuration error, not a silent no-op
+        const names = new Set(tools.map((t) => t.name));
+        const unknown = [...this.config.attestReadOnly, ...this.config.allow].filter((t) => !names.has(t));
+        if (unknown.length) {
+          client.close();
+          throw new Error(
+            `server '${this.name}': attested/allowed tool(s) not present on the server: ${unknown.join(', ')} — re-check servers.json5`,
+          );
+        }
+        this.client = client;
+        this.tools = new Map(tools.map((t) => [t.name, t]));
+        this.ready = true;
+        this.touchIdle();
         return;
       } catch (e) {
         lastError = e;
@@ -177,128 +150,8 @@ class DownstreamServer {
     }
     this.blockedUntil = Date.now() + (this.opts.backoffMs ?? 5_000);
     throw new Error(
-      `server '${this.name}' failed to start: ${lastError instanceof Error ? lastError.message : lastError}`,
+      `server '${this.name}' failed to connect: ${lastError instanceof Error ? lastError.message : lastError}`,
     );
-  }
-
-  private async spawnAndHandshake(deadline: number): Promise<void> {
-    if (this.config.url) {
-      // Remote transport: no process; interpolate url/headers from env.
-      this.http = {
-        url: interpolate(this.config.url, { env: process.env }),
-        headers: Object.fromEntries(
-          Object.entries(this.config.headers).map(([k, v]) => [k, interpolate(v, { env: process.env })]),
-        ),
-      };
-      await this.handshake(deadline);
-      return;
-    }
-    // Least privilege for children too: baseline env + configured vars, unless
-    // the operator opts into full inheritance.
-    const env: Record<string, string | undefined> = this.config.inheritEnv
-      ? { ...process.env }
-      : Object.fromEntries(BASELINE_ENV_KEYS.map((k) => [k, process.env[k]]));
-    for (const [key, value] of Object.entries(this.config.env)) {
-      env[key] = interpolate(value, { env: process.env });
-    }
-    const child = spawn(this.config.command!, this.config.args, {
-      env,
-      shell: this.config.shell,
-    });
-    this.child = child;
-    child.stdin.on('error', () => {}); // EPIPE surfaces via the exit handler instead
-    child.on('error', (e) => this.teardown(`failed to start: ${e.message}`));
-    child.on('exit', (code) => this.teardown(`exited with code ${code}`));
-    child.stdout.on('data', (chunk: Buffer) => this.onData(chunk));
-    child.stderr.on('data', (chunk: Buffer) => process.stderr.write(`flowmcp: [${this.name}] ${chunk}`));
-    await this.handshake(deadline);
-  }
-
-  private async handshake(deadline: number): Promise<void> {
-    const init = (await this.request(
-      'initialize',
-      {
-        protocolVersion: NEWEST_PROTOCOL,
-        capabilities: {},
-        clientInfo: { name: 'flowmcp', version: '0.4.0' },
-      },
-      deadline,
-    )) as { protocolVersion?: string };
-    if (!PROTOCOL_REVISIONS.includes(init?.protocolVersion ?? '')) {
-      throw new Error(
-        `server '${this.name}' negotiated unsupported protocol version '${init?.protocolVersion}'`,
-      );
-    }
-    this.notify('notifications/initialized');
-    const listed = (await this.request('tools/list', {}, deadline)) as { tools: DownstreamTool[] };
-    this.tools = new Map(listed.tools.map((t) => [t.name, t]));
-    this.ready = true;
-    this.touchIdle();
-  }
-
-  private async request(method: string, params: Record<string, unknown>, deadline: number): Promise<unknown> {
-    if (this.http) {
-      const timeoutMs = deadline - Date.now();
-      if (timeoutMs <= 0) throw new Error(`no time left for server '${this.name}'`);
-      const id = this.nextId++;
-      const msg = await streamableHttpRequest(this.http, { jsonrpc: '2.0', id, method, params }, timeoutMs);
-      if (!msg) throw new Error(`server '${this.name}': empty response to ${method}`);
-      if (msg.error) throw new Error(`server '${this.name}': ${(msg.error as { message?: string }).message ?? 'error'}`);
-      return msg.result;
-    }
-    const child = this.child;
-    if (!child) return Promise.reject(new Error(`server '${this.name}' is not running`));
-    const timeoutMs = deadline - Date.now();
-    if (timeoutMs <= 0) return Promise.reject(new Error(`no time left for server '${this.name}'`));
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`request '${method}' to server '${this.name}' timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (v) => {
-          clearTimeout(timer);
-          resolve(v);
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      });
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-    });
-  }
-
-  private notify(method: string): void {
-    if (this.http) {
-      void streamableHttpRequest(this.http, { jsonrpc: '2.0', method }, 10_000).catch(() => {});
-      return;
-    }
-    this.child?.stdin.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
-  }
-
-  private onData(chunk: Buffer): void {
-    this.buffer += chunk.toString();
-    let idx: number;
-    while ((idx = this.buffer.indexOf('\n')) !== -1) {
-      const line = this.buffer.slice(0, idx);
-      this.buffer = this.buffer.slice(idx + 1);
-      if (!line.trim()) continue;
-      let msg: { id?: number; result?: unknown; error?: { message?: string } };
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        process.stderr.write(`flowmcp: [${this.name}] non-JSON on stdout: ${line.slice(0, 120)}\n`);
-        continue;
-      }
-      if (msg.id === undefined) continue; // downstream notification — ignore
-      const pending = this.pending.get(msg.id);
-      this.pending.delete(msg.id);
-      if (!pending) continue;
-      if (msg.error) pending.reject(new Error(`server '${this.name}': ${msg.error.message ?? 'error'}`));
-      else pending.resolve(msg.result);
-    }
   }
 
   private touchIdle(): void {
@@ -309,17 +162,15 @@ class DownstreamServer {
 
   private teardown(reason: string): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.http = undefined;
-    const child = this.child;
-    this.child = undefined;
+    const client = this.client;
+    this.client = undefined;
     this.ready = false;
     this.tools.clear();
-    this.buffer = '';
-    child?.kill();
-    for (const pending of this.pending.values()) {
-      pending.reject(new Error(`server '${this.name}' ${reason}`));
+    if (client) {
+      client.onClose = undefined;
+      client.close();
     }
-    this.pending.clear();
+    void reason;
   }
 }
 

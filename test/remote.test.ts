@@ -62,7 +62,7 @@ describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
   it('refuses unannotated, unattested tools fail-closed', async () => {
     const res = await client.request('tools/call', { name: 'erp_blocked' });
     expect(isError(res)).toBe(true);
-    expect(text(res)).toContain("not attested in 'readOnly'");
+    expect(text(res)).toContain("not attested in 'attestReadOnly'");
   });
 
   it('gates the remote write behind two-phase confirmation, then executes exactly once', async () => {
@@ -80,12 +80,41 @@ describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
     expect(after.posted).toBe(before.posted + 1);
   });
 
+  it('rejects overlapping attestReadOnly and allow at config load', async () => {
+    const { serversSchema } = await import('../src/mcp-pool.js');
+    const bad = serversSchema.safeParse({
+      erp: { url: 'http://x', attestReadOnly: ['post_invoice'], allow: ['post_invoice'] },
+    });
+    expect(bad.success).toBe(false);
+    expect(JSON.stringify(bad.error?.issues)).toContain('disjoint');
+  });
+
+  it('fails at connect when an attested tool does not exist on the server', async () => {
+    const { McpPool } = await import('../src/mcp-pool.js');
+    const { serversSchema } = await import('../src/mcp-pool.js');
+    const cfg = serversSchema.parse({
+      erp: { url: `${erpUrl}`, headers: { Authorization: 'Bearer test-token-123' }, attestReadOnly: ['list_customerz'] },
+    });
+    const pool = new McpPool(cfg);
+    await expect(pool.call('erp', 'list_customerz', {}, Date.now() + 15_000)).rejects.toThrow(/not present on the server: list_customerz/);
+    pool.closeAll();
+  });
+
+  it('never echoes the bearer token in error surfaces', async () => {
+    const bad = new RpcClient(spawnServer(flowsDir, { ERP_URL: erpUrl, ERP_TOKEN: 'secret-credential-xyz' }));
+    await bad.request('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
+    const res = await bad.request('tools/call', { name: 'erp_report' });
+    expect(isError(res)).toBe(true);
+    expect(text(res)).not.toContain('secret-credential-xyz');
+    bad.close();
+  });
+
   it('surfaces auth failures instead of masking them', async () => {
     const bad = new RpcClient(spawnServer(flowsDir, { ERP_URL: erpUrl, ERP_TOKEN: 'wrong-token' }));
     await bad.request('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
     const res = await bad.request('tools/call', { name: 'erp_report' });
     expect(isError(res)).toBe(true);
-    expect(text(res)).toContain('401');
+    expect(text(res)).toMatch(/401|unauthorized/i);
     bad.close();
   });
 });

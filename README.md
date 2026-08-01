@@ -105,7 +105,7 @@ MCP — tokens interpolated from env):
   erp: {
     url: 'https://your-tenant.example.com/mcp',
     headers: { Authorization: 'Bearer {{env.ERP_TOKEN}}' },
-    readOnly: ['list_customers', 'get_customer'],  // attested reads (server annotates nothing)
+    attestReadOnly: ['list_customers', 'get_customer'],  // operator-attested reads (server annotates nothing)
     allow: ['post_invoice'],                       // write-capable, two-phase gated
   },
   github: {
@@ -131,7 +131,7 @@ The key property: the wrapped server's 40 tools **never appear in FlowMCP's `too
 
 Rules of engagement:
 
-- **Read-only by default, fail-closed.** A downstream tool is callable only if it declares `annotations.readOnlyHint: true`, is operator-attested as a read in that server's `readOnly` list (production servers often annotate nothing), or is explicitly named in its `allow` list. Naming a write tool is a consent moment, on purpose — and it changes what FlowMCP advertises: annotations are **computed per flow** from its steps, so a flow containing a POST or an allowlisted write tool is published with `readOnlyHint: false, destructiveHint: true`. FlowMCP never tells a client a write-capable flow is read-only.
+- **Read-only by default, fail-closed.** A downstream tool is callable only if it declares `annotations.readOnlyHint: true`, is operator-attested as a read in that server's `attestReadOnly` list (a security assertion — production servers often annotate nothing), or is explicitly named in its `allow` list. Naming a write tool is a consent moment, on purpose — and it changes what FlowMCP advertises: annotations are **computed per flow** from its steps, so a flow containing a POST or an allowlisted write tool is published with `readOnlyHint: false, destructiveHint: true`. FlowMCP never tells a client a write-capable flow is read-only.
 - **Children get a minimal environment.** Downstream servers receive a baseline (`PATH`, `HOME`, …) plus the vars you configure in their `env` block — never the whole parent environment, unless you set `inheritEnv: true` for that server.
 - **One session per child, not per flow.** Downstream servers spawn lazily on first use, stay alive across calls, respawn on crash (3 attempts, then a 5s backoff), and shut down after 5 minutes idle. The client handshakes at the newest supported protocol revision and validates what comes back.
 - **The step timeout covers spawn + handshake + call** as one unit, bounded by the flow's 60s deadline — a slow cold-start can't invisibly eat the budget.
@@ -162,8 +162,8 @@ Flow files are **trusted programs** — treat them like code, review them like c
 
 ## Design constraints (on purpose)
 
-- **Hand-rolled protocol**, ~150 lines: `initialize`, `tools/list`, `tools/call`, `ping` over newline-delimited JSON-RPC on stdio. No MCP SDK — the server is small enough to audit in one sitting.
-- **Dependencies:** `zod` and `json5`. That's it.
+- **Hand-rolled server protocol**, ~150 lines: `initialize`, `tools/list`, `tools/call`, `ping` over newline-delimited JSON-RPC on stdio — small enough to audit in one sitting. The line we hold: we implement the MCP surface we govern; we use the reference client for downstream interoperability.
+- **Dependencies:** `zod`, `json5`, and the official MCP SDK — used ONLY as the reference client transport for consuming remote (Streamable HTTP) downstream servers, pinned to its v1 line. FlowMCP's governed server runtime and workflow engine are hand-built and intentionally small; commodity protocol churn is delegated to the reference client.
 - **Small surfaces everywhere:** few tools, ≤300-char descriptions, ≤3 params. Every token in `tools/list` is budget spent by every client on every turn.
 - **Writes are gated by construction.** A flow containing a write step (a POST, or an `mcp_call` to an allowlisted tool) automatically gets a **two-phase confirmation protocol** — there is no opt-out flag. The first call runs the read steps, pauses before the first write, and returns a proposal plus a single-use confirmation token (5-minute expiry) bound to the frozen pre-write state; confirming executes exactly what was proposed, never a recomputation. A `proposal` template on the flow customizes the prompt. Write flows advertise `readOnlyHint: false` and a `confirm` parameter — all computed from the steps, never declared. Be precise about what this is *not*: the model receives the token and can confirm autonomously, so this is a checkpoint, not a guaranteed human gate — a human-in-the-loop guarantee requires the MCP host to mediate the confirmation call (which the pause makes possible).
 - stdout is the protocol channel; all logging goes to stderr.

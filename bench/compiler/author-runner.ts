@@ -9,44 +9,8 @@
 //   replay: npx tsx author-runner.ts <script.js> replay <cassette.json> --variant 0|1
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { loadServers } from '../../src/loader.js';
-import { streamableHttpRequest, type HttpTarget } from '../../src/mcp-pool.js';
-import { interpolate } from '../../src/interpolate.js';
-
-interface Rpc { id: number; result?: Record<string, unknown>; error?: { message?: string } }
-
-class Client {
-  private nextId = 1;
-  private pending = new Map<number, (m: Rpc) => void>();
-  private buffer = '';
-  constructor(private child: ChildProcessWithoutNullStreams) {
-    child.stdout.on('data', (c: Buffer) => {
-      this.buffer += c.toString();
-      let i: number;
-      while ((i = this.buffer.indexOf('\n')) !== -1) {
-        const line = this.buffer.slice(0, i);
-        this.buffer = this.buffer.slice(i + 1);
-        if (!line.trim()) continue;
-        try {
-          const m = JSON.parse(line) as Rpc;
-          this.pending.get(m.id)?.(m);
-          this.pending.delete(m.id);
-        } catch { /* downstream noise */ }
-      }
-    });
-    child.stderr.on('data', () => {});
-  }
-  request(method: string, params: Record<string, unknown> = {}): Promise<Rpc> {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error(`timeout: ${method}`)), 30_000);
-      this.pending.set(id, (m) => { clearTimeout(t); resolve(m); });
-      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-    });
-  }
-  kill(): void { this.child.kill(); }
-}
+import { createDownstreamClient, type DownstreamClient } from '../../src/downstream.js';
 
 interface ToolInfo { name: string; description?: string; annotations?: { readOnlyHint?: boolean } }
 
@@ -73,7 +37,7 @@ const key = (name: string, args: unknown) => `${name}|${JSON.stringify(args)}`;
 interface TraceEntry { seq: number; name: string; args: unknown; result: unknown }
 const trace: TraceEntry[] = [];
 let seq = 0;
-const clients: Client[] = [];
+const clients: DownstreamClient[] = [];
 
 async function buildTools(): Promise<Record<string, (args?: Record<string, unknown>) => Promise<unknown>>> {
   const tools: Record<string, (args?: Record<string, unknown>) => Promise<unknown>> = {};
@@ -95,40 +59,24 @@ async function buildTools(): Promise<Record<string, (args?: Record<string, unkno
     return tools;
   }
   const configs = await loadServers(serversDir!);
+  const dl = () => Date.now() + 30_000;
   for (const [serverName, config] of Object.entries(configs)) {
-    let rpc: (method: string, params?: Record<string, unknown>) => Promise<Rpc>;
-    if (config.url) {
-      const target: HttpTarget = {
-        url: interpolate(config.url, { env: process.env }),
-        headers: Object.fromEntries(Object.entries(config.headers).map(([k, v]) => [k, interpolate(v, { env: process.env })])),
-      };
-      let nextId = 1;
-      rpc = async (method, params = {}) => {
-        const msg = await streamableHttpRequest(target, { jsonrpc: '2.0', id: nextId++, method, params }, 30_000);
-        return (msg ?? {}) as unknown as Rpc;
-      };
-    } else {
-      const env: Record<string, string | undefined> = { PATH: process.env.PATH, HOME: process.env.HOME };
-      for (const [k, v] of Object.entries(config.env)) env[k] = interpolate(v, { env: process.env });
-      const client = new Client(spawn(config.command!, config.args, { env, shell: config.shell }));
-      clients.push(client);
-      rpc = (method, params = {}) => client.request(method, params);
-    }
-    await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'flowmcp-author', version: '0' } });
-    const listed = await rpc('tools/list');
-    for (const t of (listed.result?.tools ?? []) as ToolInfo[]) {
+    const client = createDownstreamClient(serverName, config);
+    clients.push(client);
+    await client.connect(dl());
+    const listed = await client.listTools(dl());
+    for (const t of listed) {
       // discovery is read-only: annotated OR operator-attested; never allow-listed writes
-      if (t.annotations?.readOnlyHint !== true && !config.readOnly.includes(t.name)) continue;
+      if (t.annotations?.readOnlyHint !== true && !config.attestReadOnly.includes(t.name)) continue;
       if (tools[t.name]) throw new Error(`tool name collision across servers: ${t.name}`);
       process.stderr.write(`TOOLMAP ${t.name} ${serverName}\n`);
       tools[t.name] = async (args = {}) => {
-        const res = await rpc('tools/call', { name: t.name, arguments: args });
-        if (res.error) throw new Error(`${t.name}: ${res.error.message}`);
-        const content = (res.result as { content?: Array<{ type: string; text?: string }>; isError?: boolean });
-        const text = (content.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
-        if (content.isError) throw new Error(`${t.name} error: ${text.slice(0, 200)}`);
+        const res = await client.callTool(t.name, args, dl());
+        const text = (res.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+        if (res.isError) throw new Error(`${t.name} error: ${text.slice(0, 200)}`);
         let parsed: unknown;
-        try { parsed = JSON.parse(text); } catch { parsed = text; }
+        if (res.structuredContent !== undefined) parsed = res.structuredContent;
+        else { try { parsed = JSON.parse(text); } catch { parsed = text; } }
         cassette[key(t.name, args)] = parsed;
         return record(t.name, args, parsed);
       };
@@ -150,10 +98,10 @@ const emit = (s: string) => process.stdout.write(s + '\n');
   const result = await main(tools);
   if (mode === 'record') writeFileSync(cassettePath, JSON.stringify(cassette, null, 1));
   emit(JSON.stringify({ variant: mode === 'record' ? -1 : variantIdx, result: String(result), trace }, null, 1));
-  clients.forEach((c) => c.kill());
+  clients.forEach((c) => c.close());
   process.exit(0);
 })().catch((e: unknown) => {
   emit(JSON.stringify({ variant: variantIdx, error: e instanceof Error ? e.message : String(e), trace }, null, 1));
-  clients.forEach((c) => c.kill());
+  clients.forEach((c) => c.close());
   process.exit(1);
 });

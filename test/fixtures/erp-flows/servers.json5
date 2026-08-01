@@ -4,7 +4,7 @@
   erp: {
     url: '{{env.ERP_URL}}',
     headers: { Authorization: 'Bearer {{env.ERP_TOKEN}}' },
-    readOnly: ['list_customers', 'get_customer', 'list_overdue_invoices'],
+    attestReadOnly: ['list_customers', 'get_customer', 'list_overdue_invoices'],
     allow: ['post_invoice'],
   },
 }
