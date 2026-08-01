@@ -1,0 +1,33 @@
+```javascript
+async function main(tools) {
+  const queries = [
+    "open source LLM model release Qwen Gemma Llama",
+    "AI agent framework tool calling MCP",
+    "local LLM inference edge AI hardware",
+    "AI engineering best practices production LLM"
+  ];
+  const facetNames = [
+    "open-source models",
+    "agent frameworks and tool calling",
+    "local inference and edge AI",
+    "AI engineering best practices"
+  ];
+
+  const results = [];
+  for (let i = 0; i < queries.length; i++) {
+    const res = await tools.searxng_search({ q: queries[i], time_range: "week" });
+    results.push({ facet: facetNames[i], data: res });
+  }
+
+  let md = "# Weekly AI gathering — raw material\n\n";
+  for (const r of results) {
+    md += `## ${r.facet}\n`;
+    for (const item of r.data.results || []) {
+      md += `- **${item.title}** — ${item.url}\n  ${item.snippet}\n`;
+    }
+    md += "\n";
+  }
+  return md.trim();
+}
+```
+tokens: {"prompt_tokens":404,"completion_tokens":318,"total_tokens":722}

@@ -1,0 +1,8 @@
+{
+  "source": "gather.v0.json",
+  "flowName": "weekly_gather",
+  "warnings": [],
+  "droppedCalls": [],
+  "dedupedCalls": [],
+  "nodes": 4
+}

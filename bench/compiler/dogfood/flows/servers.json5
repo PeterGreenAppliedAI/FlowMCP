@@ -1,0 +1,7 @@
+{
+  searxng: {
+    command: 'node',
+    args: ['--import', 'tsx', 'bench/compiler/searxng-server.ts'],
+    env: { SEARXNG_URL: '{{env.SEARXNG_URL}}' },
+  },
+}

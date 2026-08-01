@@ -55,7 +55,7 @@ interface Node {
   fanout?: { overId: string; slice: number; as: string; itemArgPath: string };
 }
 
-export function compile(v0: Run, v1: Run, flowName: string, sourceName: string) {
+export function compile(v0: Run, v1: Run, flowName: string, sourceName: string, serverName = 'prims') {
   const provenance: Record<string, unknown> = { source: sourceName, flowName };
   const warnings: string[] = [];
   const dropped: string[] = [];
@@ -210,10 +210,10 @@ export function compile(v0: Run, v1: Run, flowName: string, sourceName: string) 
   for (const n of kept) {
     if (n.fanout) {
       steps.push(`    { id: '${n.id}', kind: 'map', over: 'steps.${n.fanout.overId}[0:${n.fanout.slice}]', as: 'x',
-      step: { kind: 'mcp_call', server: 'prims', tool: '${n.tool}', args: { ${n.fanout.itemArgPath}: '{{x}}' } } },`);
+      step: { kind: 'mcp_call', server: '${serverName}', tool: '${n.tool}', args: { ${n.fanout.itemArgPath}: '{{x}}' } } },`);
     } else {
       const args = Object.entries(n.args).map(([p, v]) => `${p.includes('.') ? `'${p}'` : p}: '${v}'`).join(', ');
-      steps.push(`    { id: '${n.id}', kind: 'mcp_call', server: 'prims', tool: '${n.tool}'${args ? `, args: { ${args} }` : ''} },`);
+      steps.push(`    { id: '${n.id}', kind: 'mcp_call', server: '${serverName}', tool: '${n.tool}'${args ? `, args: { ${args} }` : ''} },`);
     }
   }
   const fan = kept.find((n) => n.fanout);
@@ -254,11 +254,12 @@ if (process.argv[2]) {
   const v0Path = process.argv[2]!;
   const outDir = process.argv[3] ?? 'bench/compiler/out';
   const flowName = process.argv[4] ?? 'compiled_flow';
+  const serverName = process.argv[5] ?? 'prims';
   const v0 = JSON.parse(readFileSync(v0Path, 'utf8')) as Run;
   const v1 = JSON.parse(readFileSync(v0Path.replace('.v0.', '.v1.'), 'utf8')) as Run;
   mkdirSync(outDir, { recursive: true });
   try {
-    const { flow, provenance } = compile(v0, v1, flowName, basename(v0Path));
+    const { flow, provenance } = compile(v0, v1, flowName, basename(v0Path), serverName);
     writeFileSync(join(outDir, `${flowName}.flow.json5`), flow);
     writeFileSync(join(outDir, `${flowName}.provenance.json`), JSON.stringify(provenance, null, 2));
     console.log(`compiled → ${join(outDir, `${flowName}.flow.json5`)}`);
