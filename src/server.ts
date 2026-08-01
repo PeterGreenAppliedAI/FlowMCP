@@ -68,7 +68,19 @@ function toolsList(state: ServerState): Record<string, unknown> {
       const properties: Record<string, unknown> = {};
       const required: string[] = [];
       for (const [name, param] of Object.entries(flow.input)) {
-        properties[name] = { type: param.type, description: param.description };
+        // Advertise defaults in BOTH channels: JSON Schema `default` and the
+        // description text — some models ignore schema defaults, and an
+        // unadvertised default sends reasoning models into deliberation
+        // instead of a call (measured: 240s stalls on the vague-prompt task).
+        const withDefault =
+          param.default !== undefined
+            ? `${param.description} Optional; defaults to ${JSON.stringify(param.default)}.`
+            : param.description;
+        properties[name] = {
+          type: param.type,
+          description: withDefault,
+          ...(param.default !== undefined ? { default: param.default } : {}),
+        };
         if (param.required) required.push(name);
       }
       // Statically computed from the flow's steps — a POST or an allowlisted
@@ -214,6 +226,23 @@ async function main(): Promise<void> {
   }
   if (process.argv.includes('--validate')) {
     log('flows valid');
+    process.exit(0);
+  }
+  if (process.argv.includes('--explain')) {
+    // Routing preamble, generated FROM the surface — paste into any router's
+    // system prompt so an LLM can pick the right flow (or decline).
+    const lines = [
+      `You can call ${state.flows.length} workflow tool(s). Pick the ONE whose description matches the request; fill only its listed parameters. Parameters with defaults can be omitted — trust the default rather than deliberating. If a required parameter or an environment choice (which account, store, tenant, city) is genuinely ambiguous from the request, ASK the user one concise question before calling — never guess. If no workflow fits, do not force one — use other means or say so.`,
+      '',
+    ];
+    for (const f of state.flows) {
+      const fx = state.effects.get(f.name)!;
+      const params = Object.entries(f.input)
+        .map(([n, p]) => `${n}${p.required ? '' : '?'}: ${p.type}${p.default !== undefined ? ` = ${JSON.stringify(p.default)}` : ''}`)
+        .join(', ');
+      lines.push(`- ${f.name}(${params})${fx.readOnly ? '' : ' [WRITE — requires confirmation]'}: ${f.description}`);
+    }
+    console.log(lines.join('\n'));
     process.exit(0);
   }
 

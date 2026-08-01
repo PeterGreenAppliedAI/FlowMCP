@@ -64,7 +64,13 @@ describe('MCP protocol over stdio', () => {
     const brief = tools.find((t) => t.name === 'morning_brief')!;
     expect(brief.inputSchema).toEqual({
       type: 'object',
-      properties: { city: { type: 'string', description: 'City for the weather section' } },
+      properties: {
+        city: {
+          type: 'string',
+          description: 'City for the weather section Optional; defaults to "New York".',
+          default: 'New York',
+        },
+      },
     });
     expect(brief.annotations).toEqual({
       readOnlyHint: true,
