@@ -588,13 +588,21 @@ changing end-to-end completion; determining whether retrieval improved <em>selec
 here requires a separate trajectory-level selection score from the transcripts, which we
 have not yet computed.</p>
 
+<h2>Since this report</h2>
+<ul>
+  <li>The script→flow compiler shipped (<span class="mono">bench/compiler/</span>): the 101
+captured code-mode scripts were its starter corpus, and it now compiles observed tool use —
+trace as evidence, fail-closed on ambiguity — into governed flows, demonstrated end-to-end
+on a real recurring news-gathering workflow against live downstream servers.</li>
+  <li>Host-mediated confirmation shipped (v0.5): write flows now pause for an
+elicitation-based approval from the connecting host — a genuine human gate — with the v0.3
+two-phase token protocol as the fallback for clients without elicitation support.</li>
+</ul>
+
 <h2>Next</h2>
 <ul>
-  <li>A script→flow compiler: the 101 captured code-mode scripts are a starter corpus for mechanically compiling successful programs into governed flows.</li>
   <li>A broader task suite: more decline and partial-match shapes, tasks with no flow
 coverage at all, and more trials per cell.</li>
-  <li>Host-mediated confirmation UX for write flows — turning the v0.3 two-phase protocol
-into a genuine human gate.</li>
 </ul>
 </div>
 
