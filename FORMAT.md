@@ -101,7 +101,7 @@ it will eventually be a lie.
 
 Composition config lives beside the flows. Each entry uses exactly one
 transport: **stdio** (`command`, `args?`, `env?`, `inheritEnv?`, `shell?`) or
-**Streamable HTTP** (`url`, `headers?` — both may interpolate `{{env.X}}`, so
+**Streamable HTTP** (EXPERIMENTAL in 0.4 — minimal client, pending a full transport implementation) (`url`, `headers?` — both may interpolate `{{env.X}}`, so
 auth tokens live in the environment, never in files). Stdio children get a
 minimal baseline environment plus configured vars (`inheritEnv: true` is an
 explicit opt-in).
