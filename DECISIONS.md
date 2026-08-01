@@ -2,6 +2,65 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-08-01 — real APIs broke the compiler's variant differencing
+
+**What didn't work:** the compiler's evidence mechanism — run the same script
+under two fixture variants and diff — assumed deterministic tool responses. The
+first real dogfood target (SearXNG) returns different results every run, so
+naive differencing would have refused every real workflow.
+
+**The fix:** cassette record/replay. Record once against the live API, saving
+every (tool, args) → result pair; replay deterministically from the cassette as
+variant 0 and from a systematically mutated copy as variant 1. Realism comes
+from the real world; differencing comes from the mutation
+(`bench/compiler/real-trace-runner.ts`). Two smaller items from the same
+session: per-item ordinal numbering is unexpressible in the flow DSL (map has
+no loop index) — the compiler degrades it to list dashes with a provenance
+warning rather than emitting broken output; and the user's LAN IP briefly
+shipped as a hardcoded default in two files — removed, `SEARXNG_URL` is
+required env. Private infrastructure details don't belong in public defaults.
+
+## 2026-07-31 — code mode was measured before its docs were fair
+
+**What didn't work:** the first full wave-E run scored ~25% and looked like a
+code-mode indictment. The API doc gave tool names and parameters but no
+response shapes — models destructured invented fields
+(`const {latitude} = locationResult` against `{results:[{latitude}]}`). The
+agentic loop never has this problem: it sees every result and adapts.
+One-shot code must know response schemas a priori.
+
+**The fix:** the doc now includes example returns generated from the mocks
+themselves (they cannot drift from reality). E1 went 25% → 92%. The superseded
+run is retained in raw data and — properly framed — is itself a finding: it
+measured the schema gap between the two execution media.
+
+## 2026-07-31 — the sandbox failed valid scripts three different ways
+
+**What didn't work:** the code-mode runner crashed model programs that were
+correct: models append `module.exports = main` (no `module` in scope), append
+a top-level `main(tools)` call (no `tools` in scope at extraction), and emit
+asymmetric code fences (extraction corrupted). The failure signature —
+`exec_error` at zero tool calls from a model that demonstrably can call
+tools — is the benchmark's own lesson pointed inward: when a capable model
+produces nothing, suspect the interface before the model.
+
+**The fix:** CommonJS stubs and `tools` in the factory scope, stray-fence
+stripping, and a full re-run with the prior results explicitly superseded.
+
+## 2026-07-31 — my report edits claimed success without verifying the write
+
+**What didn't work:** a batch-edit script applied replacements in a loop with
+mid-loop assertions; one assertion failed, the script died before writing, and
+the earlier "successful" replacements were silently discarded — after which I
+reported all fixes applied. An external reviewer pasting the live page proved
+five stale lines remained.
+
+**The fix:** per-edit verification (each replacement asserted individually,
+post-write greps for the stale phrases). Same failure family as the McNemar
+glob-order bug and the sandbox bugs, same lesson a third time: verify the
+artifact, not the intent — and scratch tooling deserves the same rigor as
+product code, because its output ships.
+
 ## 2026-07-31 — the benchmark's headline statistic was wrong (review round 5)
 
 **What didn't work:** the paired McNemar analysis reported 28:0 discordant pairs.
