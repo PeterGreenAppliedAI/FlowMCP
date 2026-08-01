@@ -127,6 +127,25 @@ Rules of engagement:
 - **The step timeout covers spawn + handshake + call** as one unit, bounded by the flow's 60s deadline — a slow cold-start can't invisibly eat the budget.
 - **Results are capped** at `maxResultChars` (default 8K) — downstream verbosity is not your flow's problem to inherit. `structuredContent` is preferred when the downstream tool provides it; otherwise JSON text results are parsed so later steps can path into them.
 
+## The authoring loop (experimental)
+
+"Workflows as tools" has an obvious objection: someone has to author the workflows. The
+answer under development in [bench/compiler/](bench/compiler/): **a model helps author the
+flow once, under observation and validation — it does not improvise the workflow at
+runtime.** A model writes a program against the tool surface; an instrumented runner
+records its execution (cassette record/replay for live, nondeterministic APIs); the
+compiler derives a candidate flow from the *observed trace* — dataflow classified by
+variant differencing, constants separated from inputs, redundant calls removed — and
+emits it with provenance, warnings, and fail-closed refusals for anything it cannot
+prove. Replay against mutated data catches hardcoding before a human ever reviews it.
+
+This is not "automatic workflow generation": a generated flow carries provenance for
+every inference, warns where the DSL cannot express the source, and requires review
+before serving — and always before writes. The precise claim: existing MCP workflow
+engines execute workflows; FlowMCP is designed to **compile observed tool use into
+small, reviewable workflow tools, and then execute them deterministically**. Intelligence
+at build time, determinism at runtime.
+
 ## Trust model
 
 Flow files are **trusted programs** — treat them like code, review them like code. The expression language can't execute code, but a flow can still send data to any URL it names; what bounds the blast radius is what the flow can *see*: only the env vars it declares in `env: [...]` (never all of `process.env`), only the 0–3 inputs it declares, and only downstream MCP tools that are read-only or explicitly allowlisted. `servers.json5` is operator configuration, same trust level as the server's own command line. Don't load flow files you haven't read.
