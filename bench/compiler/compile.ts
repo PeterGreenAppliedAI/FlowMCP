@@ -158,61 +158,137 @@ export function compile(v0: Run, v1: Run, flowName: string, sourceName: string, 
   const kept = merged.filter((n) => live.has(n.id));
   for (const n of merged) if (!live.has(n.id)) dropped.push(`${n.id} (${n.tool}) — result unused`);
 
-  // 4. assemble inference: templatize the final answer against trace values, per variant
-  function templatize(run: Run): { outer: string; inner: string | null } {
+  // 4. assemble inference: templatize the final answer against trace values.
+  // FOLD GROUPS generalize repetition: a fanout node's per-call results, OR an
+  // array-of-objects inside a single call's result (e.g. search results[]) —
+  // both become a map/lines step instead of unrolled fixed slots.
+  function findObjectArrays(value: unknown, path = ''): Array<[string, unknown[]]> {
+    if (Array.isArray(value)) {
+      return value.length >= 2 && value.every((e) => e !== null && typeof e === 'object' && !Array.isArray(e))
+        ? [[path, value]]
+        : [];
+    }
+    if (value !== null && typeof value === 'object') {
+      const out: Array<[string, unknown[]]> = [];
+      for (const [k, v] of Object.entries(value)) out.push(...findObjectArrays(v, path ? `${path}.${k}` : k));
+      return out;
+    }
+    return [];
+  }
+
+  interface Group { gid: string; overExpr: string; items: unknown[] }
+
+  function templatize(run: Run): { outer: string; inners: Map<string, { template: string; count: number; overExpr: string }> } {
     const t = run.trace;
-    let text = run.result;
+    const lines = run.result.split('\n');
+    const groups: Group[] = [];
     const fan = kept.find((n) => n.fanout);
-    let inner: string | null = null;
     if (fan) {
-      const items = fan.seqs.slice(0, fan.fanout!.slice).map((s) => t.find((c) => c.seq === s)!.result);
-      const lines = text.split('\n');
-      const itemOf = (line: string) => {
-        const hits = items.map((it, k) => leaves(it).some(([, v]) => v !== null && String(v).length >= 3 && line.includes(String(v))) ? k : -1).filter((k) => k >= 0);
-        return hits.length === 1 ? hits[0]! : null;
-      };
-      const blocks: Array<{ item: number; line: string }> = [];
-      const outerLines: string[] = [];
-      for (const line of lines) {
-        const k = itemOf(line);
-        if (k !== null) blocks.push({ item: k, line });
-        else outerLines.push(line);
-      }
-      if (blocks.length < fan.fanout!.slice) throw new Refusal('assemble: could not attribute one line per fanout item');
-      const templates = new Set(blocks.map(({ item, line }) => {
-        let l = line;
-        for (const [p, v] of leaves(items[item]!).sort((a, b) => String(b[1]).length - String(a[1]).length)) {
-          if (v !== null) l = subst(l, v, `{{item.${enginePath(p)}}}`);
-        }
-        // tolerate per-item ordinal numbering anywhere in the line
-        return l.replace(new RegExp(`(?<!\\d)${item + 1}(?!\\d)`, 'g'), 'ORD');
-      }));
-      if (templates.size !== 1) throw new Refusal(`assemble: fanout item lines not structurally identical (${templates.size} shapes)`);
-      inner = [...templates][0]!;
-      const marker = '@@LINES@@';
-      let inserted = false;
-      const rebuilt: string[] = [];
-      for (const line of lines) {
-        if (itemOf(line) !== null) { if (!inserted) { rebuilt.push(marker); inserted = true; } }
-        else rebuilt.push(line);
-      }
-      text = rebuilt.join('\n');
+      groups.push({
+        gid: fan.id,
+        overExpr: `steps.${fan.id}`,
+        items: fan.seqs.slice(0, fan.fanout!.slice).map((sq) => t.find((c) => c.seq === sq)!.result),
+      });
     }
     for (const n of kept.filter((k) => !k.fanout)) {
-      for (const s of n.seqs) {
-        for (const [p, v] of leaves(t.find((c) => c.seq === s)!.result).sort((a, b) => String(b[1]).length - String(a[1]).length)) {
+      const res = t.find((c) => c.seq === n.seqs[0]!)!.result;
+      for (const [ap, arr] of findObjectArrays(res)) {
+        groups.push({ gid: `${n.id}${ap ? '_' + ap.replace(/[^A-Za-z0-9]+/g, '_') : ''}`, overExpr: `steps.${n.id}${ap ? '.' + enginePath(ap) : ''}`, items: arr });
+      }
+    }
+
+    const claimedBy: Array<{ gid: string; item: number } | null> = lines.map(() => null);
+    const inners = new Map<string, { template: string; count: number; overExpr: string }>();
+
+    for (const g of groups) {
+      const distinctive = (item: unknown, line: string) =>
+        leaves(item).some(([, v]) => v !== null && String(v).length >= 3 && line.includes(String(v)));
+      const hits: Array<{ lineIdx: number; item: number }> = [];
+      lines.forEach((line, li) => {
+        if (claimedBy[li]) return;
+        const matches = g.items.map((it, k) => (distinctive(it, line) ? k : -1)).filter((k) => k >= 0);
+        if (matches.length === 1) hits.push({ lineIdx: li, item: matches[0]! });
+      });
+      if (hits.length < 2) continue; // nothing repetitive to fold for this group
+      const itemsSeen = [...new Set(hits.map((h) => h.item))].sort((a, b) => a - b);
+      const contiguous = itemsSeen.every((v, i) => v === i);
+      if (!contiguous) {
+        throw new Refusal(
+          `group ${g.gid}: observed non-contiguous item selection [${itemsSeen.join(',')}] — the script's selection logic (e.g. cross-query dedupe) is not representable; unrolled emission would break when live data has fewer items. Re-author with a contiguous take-N, or hand-write this flow.`,
+        );
+      }
+      // BLOCK-based: an item may render as several lines (title + snippet).
+      // Extend each item's claim to the contiguous run following its first hit
+      // that contains no other item's values and is non-empty.
+      const byItem = new Map<number, number[]>();
+      for (const h of hits) {
+        if (!byItem.has(h.item)) byItem.set(h.item, []);
+        byItem.get(h.item)!.push(h.lineIdx);
+      }
+      const blockLines = new Map<number, number[]>(); // item -> line indexes
+      for (const [item, idxs] of byItem) {
+        const all = new Set(idxs);
+        const startLine = Math.min(...idxs);
+        const endLine = Math.max(...idxs);
+        for (let li = startLine; li <= endLine; li++) all.add(li); // fill interior gaps
+        blockLines.set(item, [...all].sort((a, b) => a - b));
+      }
+      const templates = new Set(
+        [...blockLines].map(([item, idxs]) => {
+          let block = idxs.map((li) => lines[li]!).join('\n');
+          for (const [p, v] of leaves(g.items[item]!).sort((a, b) => String(b[1]).length - String(a[1]).length)) {
+            if (v !== null) block = subst(block, v, `{{it.${enginePath(p)}}}`);
+          }
+          return block.replace(new RegExp(`(?<!\\d)${item + 1}(?!\\d)`, 'g'), 'ORD');
+        }),
+      );
+      if (templates.size !== 1) {
+        throw new Refusal(
+          `group ${g.gid}: per-item blocks not structurally identical (${templates.size} shapes) — unrolled emission would be fragile on live data. Re-author for uniform per-item rendering, or hand-write this flow.`,
+        );
+      }
+      for (const [item, idxs] of blockLines) for (const li of idxs) claimedBy[li] = { gid: g.gid, item };
+      inners.set(g.gid, { template: [...templates][0]!, count: itemsSeen.length, overExpr: g.overExpr });
+    }
+
+    // rebuild outer: first claimed line of each folded group becomes its marker
+    const emitted = new Set<string>();
+    const outLines: string[] = [];
+    lines.forEach((line, li) => {
+      const c = claimedBy[li];
+      if (c && inners.has(c.gid)) {
+        if (!emitted.has(c.gid)) { outLines.push(`@@G_${c.gid}@@`); emitted.add(c.gid); }
+        return;
+      }
+      outLines.push(line);
+    });
+    let text = outLines.join('\n');
+    for (const n of kept.filter((k) => !k.fanout)) {
+      for (const sq of n.seqs) {
+        for (const [p, v] of leaves(t.find((c) => c.seq === sq)!.result).sort((a, b) => String(b[1]).length - String(a[1]).length)) {
           if (v === null) continue;
           text = subst(text, v, `{{steps.${n.id}.${enginePath(p)}}}`);
         }
       }
     }
-    return { outer: text, inner };
+    return { outer: text, inners };
   }
   const a0 = templatize(v0);
   const a1 = templatize(v1);
-  if (a0.outer !== a1.outer || a0.inner !== a1.inner) {
+  const innersEqual =
+    a0.inners.size === a1.inners.size &&
+    [...a0.inners].every(([gid, v]) => a1.inners.get(gid)?.template === v.template && a1.inners.get(gid)?.count === v.count);
+  if (a0.outer !== a1.outer || !innersEqual) {
     throw new Refusal('assemble: templates differ across variants — output not fully explained by trace values');
   }
+
+  // input substitution into templates: the promoted input value appears in the
+  // output too (titles, headers) — parameterize it there as well
+  const substInputs = (text: string) => {
+    let out = text;
+    for (const [name, ex] of Object.entries(inputs)) out = subst(out, ex, `{{input.${name}}}`);
+    return out;
+  };
 
   // 5. emit flow
   const steps: string[] = [];
@@ -225,17 +301,19 @@ export function compile(v0: Run, v1: Run, flowName: string, sourceName: string, 
       steps.push(`    { id: '${n.id}', kind: 'mcp_call', server: '${serverOf(n.tool)}', tool: '${n.tool}'${args ? `, args: { ${args} }` : ''} },`);
     }
   }
-  const fan = kept.find((n) => n.fanout);
-  if (fan && a0.inner) {
-    let innerTemplate = a0.inner.replace(/\{\{item\./g, '{{it.');
+  let output = a0.outer;
+  for (const [gid, inner] of a0.inners) {
+    let innerTemplate = substInputs(inner.template);
     if (innerTemplate.includes('ORD')) {
       warnings.push('per-item ordinal numbering dropped: the flow DSL map has no loop index; emitted as list dashes');
       innerTemplate = innerTemplate.replace(/^\s*(?:[A-Za-z]+ )?ORD[.):]?\s*/, '- ').replace(/ORD/g, '');
     }
-    steps.push(`    { id: 'lines', kind: 'map', over: 'steps.${fan.id}', as: 'it',
+    const stepId = `lines_${gid}`;
+    steps.push(`    { id: '${stepId}', kind: 'map', over: '${inner.overExpr}[0:${inner.count}]', as: 'it',
       step: { kind: 'template', template: ${JSON.stringify(innerTemplate)} } },`);
+    output = output.replace(`@@G_${gid}@@`, `{{steps.${stepId}}}`);
   }
-  const output = a0.outer.replace('@@LINES@@', '{{steps.lines}}');
+  output = substInputs(output);
   const inputBlock = Object.keys(inputs).length
     ? `  input: {\n${Object.entries(inputs).map(([k, ex]) => `    ${k}: { type: 'string', description: ${JSON.stringify(`Observed values include ${ex}`)}, required: false, default: ${JSON.stringify(ex)} },`).join('\n')}\n  },\n`
     : '  input: {},\n';

@@ -2,9 +2,9 @@
 // Review before use. Evidence: matched traces under two fixture variants.
 {
   name: 'compiled_brief',
-  description: 'WHEN TO USE: compiled candidate from a successful model-authored script (qwen2.5_7b-E1-brief_city-1.v0.json).',
+  description: "WHEN TO USE: compiled candidate from a successful model-authored script (qwen2.5_7b-E1-brief_city-1.v0.json).",
   input: {
-    city: { type: 'string', description: 'City for the brief', required: false, default: "Lisbon" },
+    city: { type: 'string', description: "Observed values include Lisbon", required: false, default: "Lisbon" },
   },
   steps: [
     { id: 'n0', kind: 'mcp_call', server: 'prims', tool: 'search_locations', args: { query: '{{input.city}}' } },
@@ -12,9 +12,9 @@
     { id: 'n2', kind: 'mcp_call', server: 'prims', tool: 'hn_get_top_story_ids' },
     { id: 'n3', kind: 'map', over: 'steps.n2[0:5]', as: 'x',
       step: { kind: 'mcp_call', server: 'prims', tool: 'hn_get_item', args: { id: '{{x}}' } } },
-    { id: 'lines', kind: 'map', over: 'steps.n3', as: 'it',
+    { id: 'lines_n3', kind: 'map', over: 'steps.n3[0:5]', as: 'it',
       step: { kind: 'template', template: "- Title: {{it.title}}, Score: {{it.id}}, URL: {{it.url}}" } },
-    { id: 'render', kind: 'template', template: "Today's forecast for {{steps.n0.results[0].name}}:\n- High temperature: {{steps.n1.daily.temperature_2m_max[0]}}°C\n- Low temperature: {{steps.n1.daily.temperature_2m_min[0]}}°C\n- Precipitation probability: {{steps.n1.daily.precipitation_probability_max[0]}}%\n\nTop 5 Hacker News stories:\n{{steps.lines}}" },
+    { id: 'render', kind: 'template', template: "Today's forecast for {{steps.n0.results[0].name}}:\n- High temperature: {{steps.n1.daily.temperature_2m_max[0]}}°C\n- Low temperature: {{steps.n1.daily.temperature_2m_min[0]}}°C\n- Precipitation probability: {{steps.n1.daily.precipitation_probability_max[0]}}%\n\nTop 5 Hacker News stories:\n{{steps.lines_n3}}" },
   ],
   output: '{{steps.render}}',
 }

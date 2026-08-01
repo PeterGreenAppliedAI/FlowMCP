@@ -1,0 +1,128 @@
+{
+ "variant": 1,
+ "result": "# Qwen AI – Latest News & Community Discussion (Past Week)\n\n- **ALT Qwen — AI News Today** — [Link](https://best-ai.news/ai-models/qwen/alt)\n  > No snippet available.\n\n- **ALT qwen ai News and Updates from The Economic Times - Page 1** — [Link](https://economictimes.indiatimes.com/topic/qwen-ai/news/alt)\n  > No snippet available.\n\n- **ALT Qwen-Image-2.0 Released: Next-Gen 7B Image Model with Native 2K ...** — [Link](https://qwenimages.com/blog/qwen-image-2-release/alt)\n  > No snippet available.\n\n- **ALT Qwen - AI Wiki** — [Link](https://aiwiki.ai/wiki/qwen/alt)\n  > No snippet available.\n\n- **ALT Qwen 3.7 Is Out: Can You Run It Locally? - localclaw.io** — [Link](https://localclaw.io/blog/qwen-3-7-local-ai/alt)\n  > No snippet available.\n\n- **ALT What Is Qwen? Alibaba's Open-Source AI Explained (2026)** — [Link](https://pickurai.ai/ai-use-cases/what-is-qwen/alt)\n  > No snippet available.\n\n- **ALT Alibaba steps up focus on Qwen LLM - Chinadaily.com.cn** — [Link](https://global.chinadaily.com.cn/a/202603/07/WS69ab7e72a310d6866eb3c48e.html/alt)\n  > No snippet available.\n\n- **ALT Apple's China Quarter Misses Just as Qwen Reaches… | AI in Asia** — [Link](https://aiinasia.com/greater-china/apple-greater-china-miss-qwen-apple-intelligence-greater-china-news-2026-07-31/alt)\n  > No snippet available.\n\n- **ALT Qwen3.6 Deep Dive: Comprehensive Analysis of Alibaba's Latest Open ...** — [Link](https://www.flechetechstream.com/2026/07/28/qwen3-6-deep-dive-comprehensive-analysis-of-alibabas-latest-open-source-llm-family-and-its-variants//alt)\n  > No snippet available.\n\n- **ALT Is chat.qwen.ai Down Right Now? Live Status | DownOrNot** — [Link](https://downornot.net/check/chat.qwen.ai/alt)\n  > No snippet available.\n\n- **ALT DavidAU/Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED ...** — [Link](https://huggingface.co/DavidAU/Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED/discussions/2/alt)\n  > No snippet available.\n\n- **ALT Is Qwen Down? Alibaba AI Chat Live Status | is-down.ai** — [Link](https://is-down.ai/status/qwen//alt)\n  > No snippet available.\n\n",
+ "trace": [
+  {
+   "seq": 0,
+   "name": "searxng_search",
+   "args": {
+    "q": "Qwen AI news",
+    "time_range": "week"
+   },
+   "result": {
+    "query": "ALT Qwen AI news",
+    "results": [
+     {
+      "title": "ALT Qwen — AI News Today",
+      "url": "https://best-ai.news/ai-models/qwen/alt",
+      "snippet": "ALT 270 latest AI news stories about Qwen. Curated from 30+ sources including Google News, Reddit, and Hacker News. Updated every 15 minutes.",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT qwen ai News and Updates from The Economic Times - Page 1",
+      "url": "https://economictimes.indiatimes.com/topic/qwen-ai/news/alt",
+      "snippet": "ALT SEARCHED FOR: QWEN AI Moonshot has Nvidia chip cluster from Alibaba computing deal: Bloomberg News reports Chinese AI firm Moonshot has secured computing power from Alibaba. This deal involves approximately twenty thousand Nvidia chips for their models. Moonshot recently unveiled its Kimi K3 model, ",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Qwen-Image-2.0 Released: Next-Gen 7B Image Model with Native 2K ...",
+      "url": "https://qwenimages.com/blog/qwen-image-2-release/alt",
+      "snippet": "ALT Alibaba's Qwen team launches Qwen-Image-2.0, a next-generation 7B parameter image foundation model achieving #1 on AI Arena in both text-to-image and image editing. With native 2K resolution, 1K-token prompt support for professional infographics, and a lighter architecture — it outperforms FLUX.1 (1",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Qwen - AI Wiki",
+      "url": "https://aiwiki.ai/wiki/qwen/alt",
+      "snippet": "ALT Qwen is a family of large language models and multimodal models developed by the Qwen Team at Alibaba Cloud. Alibaba introduced the broader Tongyi Qianwen product in April 2023 and released the first Qwen model weights...",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Qwen 3.7 Is Out: Can You Run It Locally? - localclaw.io",
+      "url": "https://localclaw.io/blog/qwen-3-7-local-ai/alt",
+      "snippet": "ALT That is exciting, but it matters because the local AI community often reads \"new Qwen\" and immediately searches for a GGUF, Ollama tag or LM Studio entry. This time, the careful answer is: Qwen 3.7 is a cloud-forward release first. If you want the newest Qwen agent model through API, Qwen 3.7 is rel",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT What Is Qwen? Alibaba's Open-Source AI Explained (2026)",
+      "url": "https://pickurai.ai/ai-use-cases/what-is-qwen/alt",
+      "snippet": "ALT Qwen is Alibaba's AI family and the world's most popular open-weight model — Apache-2.0, multilingual, free to self-host. What it is, its models, and how it compares to Doubao.",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Alibaba steps up focus on Qwen LLM - Chinadaily.com.cn",
+      "url": "https://global.chinadaily.com.cn/a/202603/07/WS69ab7e72a310d6866eb3c48e.html/alt",
+      "snippet": "ALT Chinese tech heavyweight Alibaba Group is reorganizing leadership and stepping up resources around its Qwen large language model following the departure of a key technical leader, as competition intensifies among China's major tech companies in the fast-growing AI application market.",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Apple's China Quarter Misses Just as Qwen Reaches… | AI in Asia",
+      "url": "https://aiinasia.com/greater-china/apple-greater-china-miss-qwen-apple-intelligence-greater-china-news-2026-07-31/alt",
+      "snippet": "ALT Apple beat on revenue and earnings in the June quarter, but Greater China and Services fell short, weeks before Qwen-powered Apple Intelligence ships in…",
+      "engine": "ALT duckduckgo"
+     }
+    ]
+   }
+  },
+  {
+   "seq": 1,
+   "name": "searxng_search",
+   "args": {
+    "q": "Qwen AI discussion",
+    "time_range": "week"
+   },
+   "result": {
+    "query": "ALT Qwen AI discussion",
+    "results": [
+     {
+      "title": "ALT What Is Qwen? Alibaba's Open-Source AI Explained (2026)",
+      "url": "https://pickurai.ai/ai-use-cases/what-is-qwen/alt",
+      "snippet": "ALT Qwen is Alibaba's AI family and the world's most popular open-weight model — Apache-2.0, multilingual, free to self-host. What it is, its models, and how it compares to Doubao.",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Qwen3.6 Deep Dive: Comprehensive Analysis of Alibaba's Latest Open ...",
+      "url": "https://www.flechetechstream.com/2026/07/28/qwen3-6-deep-dive-comprehensive-analysis-of-alibabas-latest-open-source-llm-family-and-its-variants//alt",
+      "snippet": "ALT Introduction Qwen3.6 is the latest generation of multimodal, open-source large language models developed by Alibaba Cloud's Qwen team. Released in early 2026, this model family represents a significant leap forward in open-weight AI capabilities, particularly in agentic coding, multimodal reasoning,",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Is chat.qwen.ai Down Right Now? Live Status | DownOrNot",
+      "url": "https://downornot.net/check/chat.qwen.ai/alt",
+      "snippet": "ALT About this status check DownOrNot monitors chat.qwen.ai from 3 locations (America/San Francisco, Europe/London, Asia/Singapore), checking HTTP response codes and server response times every few minutes. The site was last checked 7 hours ago and is currently responding normally. Last recorded downtim",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Qwen — AI News Today",
+      "url": "https://best-ai.news/ai-models/qwen/alt",
+      "snippet": "ALT 270 latest AI news stories about Qwen. Curated from 30+ sources including Google News, Reddit, and Hacker News. Updated every 15 minutes.",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Qwen - AI Wiki",
+      "url": "https://aiwiki.ai/wiki/qwen/alt",
+      "snippet": "ALT Qwen is a family of large language models and multimodal models developed by the Qwen Team at Alibaba Cloud. Alibaba introduced the broader Tongyi Qianwen product in April 2023 and released the first Qwen model weights...",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT DavidAU/Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED ...",
+      "url": "https://huggingface.co/DavidAU/Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED/discussions/2/alt",
+      "snippet": "ALT DavidAU / Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED like 188 Image-Text-to-Text Transformers Safetensors English Chinese qwen3_5 fine tune creative creative writing fiction writing plot generation sub-plot generation story generation scene continue storytelling fiction story science f",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Is Qwen Down? Alibaba AI Chat Live Status | is-down.ai",
+      "url": "https://is-down.ai/status/qwen//alt",
+      "snippet": "ALT Our free AI Status Widget plugin shows Qwen's live status with cards, badges and full uptime panels. Frequently asked questions Is Qwen down or just blocked in my region?",
+      "engine": "ALT duckduckgo"
+     },
+     {
+      "title": "ALT Alibaba steps up focus on Qwen LLM - Chinadaily.com.cn",
+      "url": "https://global.chinadaily.com.cn/a/202603/07/WS69ab7e72a310d6866eb3c48e.html/alt",
+      "snippet": "ALT It also said that the Qwen model team remains stable, dismissing claims of a \"collective resignation\". Although the company has denied market speculation linking the recent personnel changes to commercialization pressures, such discussions largely reflect the intensifying competition faced by Qwen i",
+      "engine": "ALT duckduckgo"
+     }
+    ]
+   }
+  }
+ ]
+}
