@@ -1,0 +1,10 @@
+// Remote enterprise-shaped server: Streamable HTTP + bearer auth. The server
+// annotates nothing, so reads are operator-ATTESTED and writes allow-listed.
+{
+  erp: {
+    url: '{{env.ERP_URL}}',
+    headers: { Authorization: 'Bearer {{env.ERP_TOKEN}}' },
+    readOnly: ['list_customers', 'get_customer', 'list_overdue_invoices'],
+    allow: ['post_invoice'],
+  },
+}

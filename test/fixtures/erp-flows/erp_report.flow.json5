@@ -1,0 +1,11 @@
+{
+  name: 'erp_report',
+  description: 'WHEN TO USE: test — overdue-invoice report from attested remote reads.',
+  input: {},
+  steps: [
+    { id: 'inv', kind: 'mcp_call', server: 'erp', tool: 'list_overdue_invoices', args: { days: '30' } },
+    { id: 'cust', kind: 'mcp_call', server: 'erp', tool: 'get_customer', args: { id: '{{steps.inv.invoices[0].customer}}' } },
+    { id: 'render', kind: 'template', template: 'Overdue: {{steps.inv.invoices[0].id}} ({{steps.inv.invoices[0].amount}}) owed by {{steps.cust.name}}' },
+  ],
+  output: '{{steps.render}}',
+}

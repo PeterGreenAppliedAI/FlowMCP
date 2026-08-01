@@ -27,19 +27,67 @@ export const serversSchema = z.record(
   z.string().regex(IDENT, 'server name must be snake_case'),
   z
     .object({
-      command: z.string().min(1),
+      // Local transport: spawn a stdio child.
+      command: z.string().min(1).optional(),
       args: z.array(z.string()).default([]),
       env: z.record(z.string()).default({}), // values may use {{env.X}} — never inline secrets
-      allow: z.array(z.string()).default([]), // non-read-only tools callable by this server's flows
+      // Remote transport: Streamable HTTP endpoint. Exactly one of command|url.
+      url: z.string().min(1).optional(),
+      headers: z.record(z.string()).default({}), // values may use {{env.X}} (auth tokens)
+      allow: z.array(z.string()).default([]), // write-capable tools callable by this server's flows
+      // Operator attestation: these tools ARE reads even though the server does
+      // not annotate them. Callable, and NOT counted as write-capable.
+      readOnly: z.array(z.string()).default([]),
       inheritEnv: z.boolean().default(false), // opt-in: pass the full parent environment through
       // Opt-in: launch via the system shell. Required on Windows for .cmd shims
       // like npx (raw spawn cannot exec them); servers.json5 is operator-trusted.
       shell: z.boolean().default(false),
     })
-    .strict(),
+    .strict()
+    .refine((c) => (c.command !== undefined) !== (c.url !== undefined), {
+      message: "exactly one of 'command' (stdio) or 'url' (Streamable HTTP) is required",
+    }),
 );
 
 export type ServerConfig = z.infer<typeof serversSchema>[string];
+
+// Minimal Streamable HTTP client: POST one JSON-RPC message, accept either a
+// direct JSON response or an SSE stream containing the response message.
+// Captures/propagates the mcp-session-id header via the mutable target.
+export interface HttpTarget { url: string; headers: Record<string, string>; sessionId?: string }
+
+export async function streamableHttpRequest(
+  target: HttpTarget,
+  message: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Record<string, unknown> | undefined> {
+  const res = await fetch(target.url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...(target.sessionId ? { 'mcp-session-id': target.sessionId } : {}),
+      ...target.headers,
+    },
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const session = res.headers.get('mcp-session-id');
+  if (session) target.sessionId = session;
+  if (res.status === 202) return undefined; // accepted notification
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const ct = res.headers.get('content-type') ?? '';
+  const body = await res.text();
+  if (ct.includes('text/event-stream')) {
+    for (const line of body.split('\n')) {
+      if (!line.startsWith('data:')) continue;
+      const msg = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
+      if (msg.id === message.id) return msg;
+    }
+    throw new Error('SSE stream ended without a response message');
+  }
+  return body.trim() ? (JSON.parse(body) as Record<string, unknown>) : undefined;
+}
 
 interface DownstreamTool {
   name: string;
@@ -65,6 +113,7 @@ export interface PoolOptions {
 
 class DownstreamServer {
   private child?: ChildProcessWithoutNullStreams;
+  private http?: HttpTarget;
   private ready = false;
   private tools = new Map<string, DownstreamTool>();
   private pending = new Map<number, Pending>();
@@ -84,10 +133,15 @@ class DownstreamServer {
     await this.connect(deadline);
     const info = this.tools.get(tool);
     if (!info) throw new Error(`server '${this.name}' has no tool '${tool}'`);
-    if (info.annotations?.readOnlyHint !== true && !this.config.allow.includes(tool)) {
+    const admitted =
+      info.annotations?.readOnlyHint === true ||
+      this.config.readOnly.includes(tool) ||
+      this.config.allow.includes(tool);
+    if (!admitted) {
       throw new Error(
         `tool '${tool}' on server '${this.name}' is not marked read-only ` +
-          `(annotations.readOnlyHint) and is not in its allow list — flows are read-only by default`,
+          `(annotations.readOnlyHint), not attested in 'readOnly', and not in 'allow' — ` +
+          `flows are read-only by default`,
       );
     }
     const result = (await this.request('tools/call', { name: tool, arguments: args }, deadline)) as McpResult;
@@ -128,6 +182,17 @@ class DownstreamServer {
   }
 
   private async spawnAndHandshake(deadline: number): Promise<void> {
+    if (this.config.url) {
+      // Remote transport: no process; interpolate url/headers from env.
+      this.http = {
+        url: interpolate(this.config.url, { env: process.env }),
+        headers: Object.fromEntries(
+          Object.entries(this.config.headers).map(([k, v]) => [k, interpolate(v, { env: process.env })]),
+        ),
+      };
+      await this.handshake(deadline);
+      return;
+    }
     // Least privilege for children too: baseline env + configured vars, unless
     // the operator opts into full inheritance.
     const env: Record<string, string | undefined> = this.config.inheritEnv
@@ -136,7 +201,7 @@ class DownstreamServer {
     for (const [key, value] of Object.entries(this.config.env)) {
       env[key] = interpolate(value, { env: process.env });
     }
-    const child = spawn(this.config.command, this.config.args, {
+    const child = spawn(this.config.command!, this.config.args, {
       env,
       shell: this.config.shell,
     });
@@ -146,13 +211,16 @@ class DownstreamServer {
     child.on('exit', (code) => this.teardown(`exited with code ${code}`));
     child.stdout.on('data', (chunk: Buffer) => this.onData(chunk));
     child.stderr.on('data', (chunk: Buffer) => process.stderr.write(`flowmcp: [${this.name}] ${chunk}`));
+    await this.handshake(deadline);
+  }
 
+  private async handshake(deadline: number): Promise<void> {
     const init = (await this.request(
       'initialize',
       {
         protocolVersion: NEWEST_PROTOCOL,
         capabilities: {},
-        clientInfo: { name: 'flowmcp', version: '0.2.0' },
+        clientInfo: { name: 'flowmcp', version: '0.4.0' },
       },
       deadline,
     )) as { protocolVersion?: string };
@@ -168,7 +236,16 @@ class DownstreamServer {
     this.touchIdle();
   }
 
-  private request(method: string, params: Record<string, unknown>, deadline: number): Promise<unknown> {
+  private async request(method: string, params: Record<string, unknown>, deadline: number): Promise<unknown> {
+    if (this.http) {
+      const timeoutMs = deadline - Date.now();
+      if (timeoutMs <= 0) throw new Error(`no time left for server '${this.name}'`);
+      const id = this.nextId++;
+      const msg = await streamableHttpRequest(this.http, { jsonrpc: '2.0', id, method, params }, timeoutMs);
+      if (!msg) throw new Error(`server '${this.name}': empty response to ${method}`);
+      if (msg.error) throw new Error(`server '${this.name}': ${(msg.error as { message?: string }).message ?? 'error'}`);
+      return msg.result;
+    }
     const child = this.child;
     if (!child) return Promise.reject(new Error(`server '${this.name}' is not running`));
     const timeoutMs = deadline - Date.now();
@@ -194,6 +271,10 @@ class DownstreamServer {
   }
 
   private notify(method: string): void {
+    if (this.http) {
+      void streamableHttpRequest(this.http, { jsonrpc: '2.0', method }, 10_000).catch(() => {});
+      return;
+    }
     this.child?.stdin.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
   }
 
@@ -228,6 +309,7 @@ class DownstreamServer {
 
   private teardown(reason: string): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.http = undefined;
     const child = this.child;
     this.child = undefined;
     this.ready = false;

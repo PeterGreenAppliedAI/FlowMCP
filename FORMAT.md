@@ -99,12 +99,20 @@ it will eventually be a lie.
 
 ## Downstream servers (`servers.json5`)
 
-Composition config lives beside the flows: `{ <name>: { command, args?, env?,
-allow?, inheritEnv?, shell? } }`. Downstream children get a minimal baseline
-environment plus configured vars (`inheritEnv: true` is an explicit opt-in);
-a downstream tool is callable only if it declares `readOnlyHint: true` or is
-named in `allow`. This file is operator-trusted configuration — same trust
-level as the server's own command line.
+Composition config lives beside the flows. Each entry uses exactly one
+transport: **stdio** (`command`, `args?`, `env?`, `inheritEnv?`, `shell?`) or
+**Streamable HTTP** (`url`, `headers?` — both may interpolate `{{env.X}}`, so
+auth tokens live in the environment, never in files). Stdio children get a
+minimal baseline environment plus configured vars (`inheritEnv: true` is an
+explicit opt-in).
+
+Tool admission is fail-closed, three ways in: a tool is callable iff it
+declares `annotations.readOnlyHint: true`, OR the operator attests it as a
+read in `readOnly: [...]` (for the many production servers that annotate
+nothing — attested tools are NOT counted write-capable), OR it is named in
+`allow: [...]` (write-capable: makes containing flows non-read-only and
+gated). This file is operator-trusted configuration — same trust level as the
+server's own command line.
 
 ## Trust model
 

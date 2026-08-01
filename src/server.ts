@@ -18,7 +18,7 @@ import { executeFlow, resumeFlow, FlowError, type PendingFlow } from './engine.j
 import { McpPool, PROTOCOL_REVISIONS } from './mcp-pool.js';
 import type { Flow } from './flow-schema.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const APPROVAL_TTL_MS = 5 * 60_000;
 // Our surface (initialize / tools/list / tools/call / ping) is unchanged across
 // these revisions; echo the client's requested version when we know it.

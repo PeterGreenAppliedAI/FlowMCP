@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { loadServers } from '../../src/loader.js';
+import { streamableHttpRequest, type HttpTarget } from '../../src/mcp-pool.js';
 import { interpolate } from '../../src/interpolate.js';
 
 interface Rpc { id: number; result?: Record<string, unknown>; error?: { message?: string } }
@@ -95,19 +96,33 @@ async function buildTools(): Promise<Record<string, (args?: Record<string, unkno
   }
   const configs = await loadServers(serversDir!);
   for (const [serverName, config] of Object.entries(configs)) {
-    const env: Record<string, string | undefined> = { PATH: process.env.PATH, HOME: process.env.HOME };
-    for (const [k, v] of Object.entries(config.env)) env[k] = interpolate(v, { env: process.env });
-    const child = spawn(config.command, config.args, { env, shell: config.shell });
-    const client = new Client(child);
-    clients.push(client);
-    await client.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'flowmcp-author', version: '0' } });
-    const listed = await client.request('tools/list');
+    let rpc: (method: string, params?: Record<string, unknown>) => Promise<Rpc>;
+    if (config.url) {
+      const target: HttpTarget = {
+        url: interpolate(config.url, { env: process.env }),
+        headers: Object.fromEntries(Object.entries(config.headers).map(([k, v]) => [k, interpolate(v, { env: process.env })])),
+      };
+      let nextId = 1;
+      rpc = async (method, params = {}) => {
+        const msg = await streamableHttpRequest(target, { jsonrpc: '2.0', id: nextId++, method, params }, 30_000);
+        return (msg ?? {}) as unknown as Rpc;
+      };
+    } else {
+      const env: Record<string, string | undefined> = { PATH: process.env.PATH, HOME: process.env.HOME };
+      for (const [k, v] of Object.entries(config.env)) env[k] = interpolate(v, { env: process.env });
+      const client = new Client(spawn(config.command!, config.args, { env, shell: config.shell }));
+      clients.push(client);
+      rpc = (method, params = {}) => client.request(method, params);
+    }
+    await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'flowmcp-author', version: '0' } });
+    const listed = await rpc('tools/list');
     for (const t of (listed.result?.tools ?? []) as ToolInfo[]) {
-      if (t.annotations?.readOnlyHint !== true) continue; // discovery is read-only, period
+      // discovery is read-only: annotated OR operator-attested; never allow-listed writes
+      if (t.annotations?.readOnlyHint !== true && !config.readOnly.includes(t.name)) continue;
       if (tools[t.name]) throw new Error(`tool name collision across servers: ${t.name}`);
       process.stderr.write(`TOOLMAP ${t.name} ${serverName}\n`);
       tools[t.name] = async (args = {}) => {
-        const res = await client.request('tools/call', { name: t.name, arguments: args });
+        const res = await rpc('tools/call', { name: t.name, arguments: args });
         if (res.error) throw new Error(`${t.name}: ${res.error.message}`);
         const content = (res.result as { content?: Array<{ type: string; text?: string }>; isError?: boolean });
         const text = (content.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');

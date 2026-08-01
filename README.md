@@ -96,8 +96,18 @@ npm start -- --flows ~/my-flows
 
 Flows can call tools on *other* MCP servers — and this is where the thesis becomes an operation instead of an opinion. Register downstream servers in a `servers.json5` next to your flow files:
 
+Downstream servers speak either transport: stdio (`command`) or remote
+Streamable HTTP (`url` + `headers`, e.g. a hosted Shopify/Business Central
+MCP — tokens interpolated from env):
+
 ```json5
 {
+  erp: {
+    url: 'https://your-tenant.example.com/mcp',
+    headers: { Authorization: 'Bearer {{env.ERP_TOKEN}}' },
+    readOnly: ['list_customers', 'get_customer'],  // attested reads (server annotates nothing)
+    allow: ['post_invoice'],                       // write-capable, two-phase gated
+  },
   github: {
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-github'],
@@ -121,7 +131,7 @@ The key property: the wrapped server's 40 tools **never appear in FlowMCP's `too
 
 Rules of engagement:
 
-- **Read-only by default, fail-closed.** A downstream tool is callable only if it declares `annotations.readOnlyHint: true` — or you explicitly name it in that server's `allow` list. Naming a write tool is a consent moment, on purpose — and it changes what FlowMCP advertises: annotations are **computed per flow** from its steps, so a flow containing a POST or an allowlisted write tool is published with `readOnlyHint: false, destructiveHint: true`. FlowMCP never tells a client a write-capable flow is read-only.
+- **Read-only by default, fail-closed.** A downstream tool is callable only if it declares `annotations.readOnlyHint: true`, is operator-attested as a read in that server's `readOnly` list (production servers often annotate nothing), or is explicitly named in its `allow` list. Naming a write tool is a consent moment, on purpose — and it changes what FlowMCP advertises: annotations are **computed per flow** from its steps, so a flow containing a POST or an allowlisted write tool is published with `readOnlyHint: false, destructiveHint: true`. FlowMCP never tells a client a write-capable flow is read-only.
 - **Children get a minimal environment.** Downstream servers receive a baseline (`PATH`, `HOME`, …) plus the vars you configure in their `env` block — never the whole parent environment, unless you set `inheritEnv: true` for that server.
 - **One session per child, not per flow.** Downstream servers spawn lazily on first use, stay alive across calls, respawn on crash (3 attempts, then a 5s backoff), and shut down after 5 minutes idle. The client handshakes at the newest supported protocol revision and validates what comes back.
 - **The step timeout covers spawn + handshake + call** as one unit, bounded by the flow's 60s deadline — a slow cold-start can't invisibly eat the budget.

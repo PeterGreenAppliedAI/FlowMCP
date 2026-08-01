@@ -1,0 +1,7 @@
+{
+  name: 'erp_blocked',
+  description: 'WHEN TO USE: test — unattested unannotated tool must be uncallable.',
+  input: {},
+  steps: [{ id: 'o', kind: 'mcp_call', server: 'erp', tool: 'create_order', args: { customer: 'C001' } }],
+  output: '{{steps.o}}',
+}

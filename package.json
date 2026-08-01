@@ -1,6 +1,6 @@
 {
   "name": "flowmcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Workflow-first MCP server: each tool is one deterministic workflow",
   "type": "module",
   "bin": {

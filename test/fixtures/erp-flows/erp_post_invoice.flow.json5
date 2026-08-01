@@ -1,0 +1,11 @@
+{
+  name: 'erp_post_invoice',
+  description: 'WHEN TO USE: test — allow-listed remote write behind two-phase confirmation.',
+  input: {},
+  steps: [
+    { id: 'inv', kind: 'mcp_call', server: 'erp', tool: 'list_overdue_invoices', args: { days: '30' } },
+    { id: 'post', kind: 'mcp_call', server: 'erp', tool: 'post_invoice', args: { id: '{{steps.inv.invoices[0].id}}' } },
+  ],
+  output: 'posted {{steps.post.posted}} (total {{steps.post.totalPosted}})',
+  proposal: 'About to post invoice {{steps.inv.invoices[0].id}} for {{steps.inv.invoices[0].amount}}.',
+}

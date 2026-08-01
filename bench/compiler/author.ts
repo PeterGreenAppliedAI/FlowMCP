@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import { loadServers } from '../../src/loader.js';
+import { streamableHttpRequest, type HttpTarget } from '../../src/mcp-pool.js';
 import { interpolate } from '../../src/interpolate.js';
 import { compile } from './compile.js';
 import { projectRoot } from '../../test/helpers.js';
@@ -85,23 +86,37 @@ async function introspect(): Promise<ToolDoc[]> {
   const configs = await loadServers(serversDir);
   const docs: ToolDoc[] = [];
   for (const [serverName, config] of Object.entries(configs)) {
-    const env: Record<string, string | undefined> = { PATH: process.env.PATH, HOME: process.env.HOME };
-    for (const [k, v] of Object.entries(config.env)) env[k] = interpolate(v, { env: process.env });
-    const client = new Client(spawn(config.command, config.args, { env, shell: config.shell }));
-    await client.request('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
-    const listed = await client.request('tools/list');
+    let rpc: (method: string, params?: Record<string, unknown>) => Promise<Rpc>;
+    let kill = () => {};
+    if (config.url) {
+      const target: HttpTarget = {
+        url: interpolate(config.url, { env: process.env }),
+        headers: Object.fromEntries(Object.entries(config.headers).map(([k, v]) => [k, interpolate(v, { env: process.env })])),
+      };
+      let nextId = 1;
+      rpc = async (method, params = {}) =>
+        ((await streamableHttpRequest(target, { jsonrpc: '2.0', id: nextId++, method, params }, 30_000)) ?? {}) as unknown as Rpc;
+    } else {
+      const env: Record<string, string | undefined> = { PATH: process.env.PATH, HOME: process.env.HOME };
+      for (const [k, v] of Object.entries(config.env)) env[k] = interpolate(v, { env: process.env });
+      const client = new Client(spawn(config.command!, config.args, { env, shell: config.shell }));
+      rpc = (method, params = {}) => client.request(method, params);
+      kill = () => client.kill();
+    }
+    await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
+    const listed = await rpc('tools/list');
     for (const t of (listed.result?.tools ?? []) as Array<{ name: string; description?: string; inputSchema?: { properties?: Record<string, unknown> }; annotations?: { readOnlyHint?: boolean } }>) {
-      if (t.annotations?.readOnlyHint !== true) continue;
+      if (t.annotations?.readOnlyHint !== true && !config.readOnly.includes(t.name)) continue;
       const doc: ToolDoc = { name: t.name, server: serverName, description: t.description ?? '', params: Object.keys(t.inputSchema?.properties ?? {}) };
       const probe = probes.find((p) => p.tool === t.name);
       if (probe) {
-        const res = await client.request('tools/call', { name: t.name, arguments: probe.args });
+        const res = await rpc('tools/call', { name: t.name, arguments: probe.args });
         const text = ((res.result as { content?: Array<{ text?: string }> })?.content ?? []).map((c) => c.text).join('');
         doc.example = text.slice(0, 400);
       }
       docs.push(doc);
     }
-    client.kill();
+    kill();
   }
   return docs;
 }
