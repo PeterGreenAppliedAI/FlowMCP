@@ -110,8 +110,12 @@ Tool admission is fail-closed, three ways in: a tool is callable iff it
 declares `annotations.readOnlyHint: true`, OR the operator attests it as a
 read in `attestReadOnly: [...]` (a security assertion for the many production
 servers that annotate nothing — attested tools are NOT counted write-capable;
-`attestReadOnly` and `allow` must be disjoint, and attested names that do not
-exist on the server fail loudly at connect time), OR it is named in
+`attestReadOnly` and `allow` must be disjoint; attested names that do not
+exist on the server fail loudly at connect time; and an optional `attestHash`
+pins the sha256 of the attested/allowed tools' schemas AS REVIEWED — upstream
+schema drift then refuses connection until a human re-reviews and re-pins,
+because an attestation is a judgment about a specific tool, not a name), OR it
+is named in
 `allow: [...]` (write-capable: makes containing flows non-read-only and
 gated). This file is operator-trusted configuration — same trust level as the
 server's own command line.

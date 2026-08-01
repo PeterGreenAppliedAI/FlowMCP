@@ -100,6 +100,22 @@ describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
     pool.closeAll();
   });
 
+  it('drift pin: matching attestHash connects; mismatch refuses until re-review', async () => {
+    const { McpPool, serversSchema } = await import('../src/mcp-pool.js');
+    const base = { url: erpUrl, headers: { Authorization: 'Bearer test-token-123' }, attestReadOnly: ['list_customers'] };
+    // capture the real hash from the unpinned-connect stderr guidance path:
+    // easier — connect pinned-wrong and read the current hash from the error
+    const wrong = new McpPool(serversSchema.parse({ erp: { ...base, attestHash: 'deadbeefdeadbeef' } }));
+    const err = await wrong.call('erp', 'list_customers', {}, Date.now() + 15_000).catch((e: Error) => e.message);
+    wrong.closeAll();
+    expect(err).toContain('attestHash mismatch');
+    const current = /current ([0-9a-f]{16})/.exec(String(err))![1]!;
+    const pinned = new McpPool(serversSchema.parse({ erp: { ...base, attestHash: current } }));
+    const res = await pinned.call('erp', 'list_customers', {}, Date.now() + 15_000);
+    pinned.closeAll();
+    expect(res.isError).toBeFalsy();
+  });
+
   it('never echoes the bearer token in error surfaces', async () => {
     const bad = new RpcClient(spawnServer(flowsDir, { ERP_URL: erpUrl, ERP_TOKEN: 'secret-credential-xyz' }));
     await bad.request('initialize', { protocolVersion: '2025-03-26', capabilities: {} });

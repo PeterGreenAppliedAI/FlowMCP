@@ -6,6 +6,7 @@
 // DownstreamClient interface (src/downstream.ts): stdio is hand-rolled,
 // Streamable HTTP uses the reference SDK client — SDK types never reach here.
 
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
   createDownstreamClient,
@@ -25,6 +26,10 @@ const policyFields = {
   // Operator SECURITY ASSERTION: these unannotated tools are reads. Callable,
   // and never counted write-capable. Unknown names fail at connect time.
   attestReadOnly: z.array(z.string()).default([]),
+  // Drift pin: sha256 over the attested/allowed tools' schemas as reviewed.
+  // Absent -> the computed hash is logged with pin guidance. Present and
+  // mismatched -> connect REFUSES until the operator re-reviews and re-pins.
+  attestHash: z.string().optional(),
 };
 
 const stdioServerSchema = z
@@ -136,6 +141,27 @@ class DownstreamServer {
           throw new Error(
             `server '${this.name}': attested/allowed tool(s) not present on the server: ${unknown.join(', ')} — re-check servers.json5`,
           );
+        }
+        // Drift detection: an attestation is a judgment about the tool AS
+        // REVIEWED. Hash the pinned tools' schemas; a changed schema voids
+        // the attestation until a human re-reviews.
+        const pinned = [...this.config.attestReadOnly, ...this.config.allow].sort();
+        if (pinned.length) {
+          const material = pinned.map((n) => {
+            const t = tools.find((x) => x.name === n)!;
+            return JSON.stringify({ name: t.name, description: t.description ?? '', inputSchema: t.inputSchema ?? {} });
+          }).join('\n');
+          const hash = createHash('sha256').update(material).digest('hex').slice(0, 16);
+          if (this.config.attestHash === undefined) {
+            process.stderr.write(
+              `flowmcp: [${this.name}] attestation unpinned — add attestHash: '${hash}' to servers.json5 to detect upstream schema drift\n`,
+            );
+          } else if (this.config.attestHash !== hash) {
+            client.close();
+            throw new Error(
+              `server '${this.name}': attested tool schemas changed upstream (attestHash mismatch: pinned ${this.config.attestHash}, current ${hash}) — re-review the tools and update attestHash`,
+            );
+          }
         }
         this.client = client;
         this.tools = new Map(tools.map((t) => [t.name, t]));
