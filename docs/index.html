@@ -8,8 +8,8 @@
     --ink-3: #7C8790;
     --rule: #E2E6E9;
     --rule-soft: #EDF0F2;
-    --a: #0891A6;      /* condition A — workflow façade */
-    --b: #A16207;      /* condition B — primitive surface */
+    --a: #0891A6; /* condition A — workflow façade */
+    --b: #A16207; /* condition B — primitive surface */
     --a-soft: #0891A61A;
     --code-bg: #EFF2F4;
   }
@@ -38,7 +38,6 @@
     --ink-3: #7C8790; --rule: #E2E6E9; --rule-soft: #EDF0F2;
     --a: #0891A6; --b: #A16207; --a-soft: #0891A61A; --code-bg: #EFF2F4;
   }
-
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
@@ -50,7 +49,6 @@
   }
   .wrap { max-width: 60rem; margin: 0 auto; padding: 0 1.25rem 5rem; }
   .prose { max-width: 42rem; }
-
   header { padding: 3.5rem 0 0; }
   .eyebrow {
     font-size: .72rem; letter-spacing: .14em; color: var(--ink-3);
@@ -62,9 +60,16 @@
     letter-spacing: -.02em; text-wrap: balance; font-weight: 700;
   }
   .sub { color: var(--ink-2); margin: 0 0 .5rem; max-width: 46rem; }
+  .tldr {
+    font-size: 1.05rem; color: var(--ink); margin: 0 0 1.25rem; max-width: 42rem;
+    line-height: 1.55;
+  }
+  .tldr strong { color: var(--a); }
+  .for-line {
+    font-size: .85rem; color: var(--ink-3); margin: 0 0 1.75rem; max-width: 42rem;
+  }
   .meta { font-size: .82rem; color: var(--ink-3); margin: 0 0 2.5rem; }
   .meta a { color: var(--a); text-decoration: none; border-bottom: 1px solid var(--rule); }
-
   h2 {
     font-size: .95rem; letter-spacing: .06em; text-transform: uppercase;
     color: var(--ink); margin: 3rem 0 1rem; padding-top: 1.5rem;
@@ -77,7 +82,6 @@
     background: var(--code-bg); padding: .1em .35em; border-radius: 4px;
     font-size: .85em;
   }
-
   /* hero stat tiles */
   .tiles {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
@@ -92,7 +96,6 @@
   .tile-num .vs { color: var(--ink-3); font-size: 1.1rem; font-weight: 400; }
   .tile-num .ca { color: var(--a); } .tile-num .cb { color: var(--b); }
   .tile-label { font-size: .8rem; color: var(--ink-2); margin-top: .35rem; line-height: 1.35; }
-
   /* charts */
   figure { margin: 1.5rem 0 2rem; }
   figcaption { font-size: .82rem; color: var(--ink-3); margin-top: .75rem; }
@@ -115,14 +118,12 @@
     white-space: nowrap;
   }
   .plot { position: relative; border-left: 2px solid var(--rule); padding-left: 2px; }
-
   #tip {
     position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--ink); color: var(--bg); font-size: .75rem;
     padding: .45rem .6rem; border-radius: 6px; max-width: 16rem; line-height: 1.4;
     font-family: ui-monospace, Menlo, Consolas, monospace;
   }
-
   /* tables */
   .tblwrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; margin: 1.25rem 0; }
   table { border-collapse: collapse; width: 100%; font-size: .82rem; background: var(--surface); }
@@ -135,7 +136,6 @@
   th.ca, td.ca { border-left: 2px solid var(--a); }
   th.cb, td.cb { border-left: 2px solid var(--b); }
   .good { color: var(--a); font-weight: 700; }
-
   .note {
     background: var(--a-soft); border-radius: 8px; padding: .9rem 1.1rem;
     font-size: .88rem; margin: 1.25rem 0; max-width: 44rem;
@@ -145,24 +145,67 @@
   footer a { color: var(--a); text-decoration: none; }
   @media (max-width: 640px) { .grp { grid-template-columns: 1fr; } .grp .name { text-align: left; grid-row: auto; } }
   :focus-visible { outline: 2px solid var(--a); outline-offset: 2px; }
+
+  /* new: collapsible detail sections */
+  details.detail {
+    border: 1px solid var(--rule); border-radius: 8px; margin: 1.25rem 0;
+    background: var(--surface); overflow: hidden;
+  }
+  details.detail > summary {
+    cursor: pointer; list-style: none; padding: .9rem 1.1rem;
+    font-size: .85rem; font-weight: 600; color: var(--ink);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; user-select: none;
+  }
+  details.detail > summary::-webkit-details-marker { display: none; }
+  details.detail > summary .hint { font-weight: 400; color: var(--ink-3); font-size: .78rem; }
+  details.detail > summary::after {
+    content: '+'; font-size: 1.1rem; color: var(--ink-3); flex-shrink: 0;
+  }
+  details.detail[open] > summary::after { content: '–'; }
+  details.detail > summary:hover { background: var(--rule-soft); }
+  details.detail .detail-body { padding: 0 1.1rem 1.1rem; }
+  details.detail[open] > summary { border-bottom: 1px solid var(--rule); }
+
+  /* new: audience line pills */
+  .toc { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 2.5rem; }
+  .toc a {
+    font-size: .78rem; color: var(--ink-2); text-decoration: none;
+    border: 1px solid var(--rule); border-radius: 999px; padding: .35rem .8rem;
+  }
+  .toc a:hover { border-color: var(--a); color: var(--a); }
 </style>
 
 <div class="wrap">
 <header>
   <p class="eyebrow"><b>FlowMCP</b> · benchmark report · 2026-07-31</p>
   <h1>Two tools beat thirty-five</h1>
+
+  <p class="tldr">Give a small local model 35 raw API tools and it fails almost every task. Collapse the same 35 tools into 2 pre-built workflows and the <strong>same model succeeds nearly every time</strong>, using a tenth of the tokens. That's the whole result — everything below is us trying to break it, and mostly failing to.</p>
+
+  <p class="for-line">For anyone building or evaluating MCP tool servers. If you just want the headline, the four numbers below and the "What the data says" section are the report — the method details and per-model tables are for people who want to check our work.</p>
+
   <p class="sub">The same self-hosted models ran against four tool surfaces: FlowMCP's
-  two-workflow façade (A), the 35-tool primitive surface the MCP ecosystem builds by default
-  (B), the primitives behind a tool-search interface (C), and flows + primitives mixed on one
-  surface (D) — plus textual-recipe condition R, which reuses B's surface while changing
-  the system prompt, and code-mode condition E (subconditions E0/E1/E2), where the model
-  writes a sandboxed program against the same primitives. Six experimental conditions.
-  A/B/C/R/E share
-  three core tasks; D adds partial-match and decline tasks. Within each pairwise comparison,
-  everything not named as the manipulated variable — models, fixture data, scoring, trials —
-  was held constant.</p>
+two-workflow façade (A), the 35-tool primitive surface the MCP ecosystem builds by default
+(B), the primitives behind a tool-search interface (C), and flows + primitives mixed on one
+surface (D) — plus textual-recipe condition R, which reuses B's surface while changing
+the system prompt, and code-mode condition E (subconditions E0/E1/E2), where the model
+writes a sandboxed program against the same primitives. Six experimental conditions.
+A/B/C/R/E share
+three core tasks; D adds partial-match and decline tasks. Within each pairwise comparison,
+everything not named as the manipulated variable — models, fixture data, scoring, trials —
+was held constant.</p>
+
   <p class="meta">Harness: <a href="https://github.com/PeterGreenAppliedAI/FlowMCP">github.com/PeterGreenAppliedAI/FlowMCP</a> <span class="mono">bench/</span> · 610 runs executed, 440 analyzed (296 agentic + 144 code-mode; 12 superseded broken-host runs, 144 superseded pre-fix code-mode runs, and smoke cells retained in the raw data) · 10 models (4B–35B + DeepSeek v4-flash, Ollama + vLLM nodes + DGX Sparks) + a frontier probe (Claude Fable 5) · raw results and transcripts committed in-repo</p>
 </header>
+
+<nav class="toc" aria-label="Section shortcuts">
+  <a href="#findings">What the data says</a>
+  <a href="#doesnt-prove">What this doesn't prove</a>
+  <a href="#full-results">Full results</a>
+  <a href="#method">Method</a>
+  <a href="#related">Related work</a>
+</nav>
 
 <div class="tiles">
   <div class="tile"><div class="tile-num"><span class="ca">79%</span> <span class="vs">vs</span> <span class="cb">10%</span></div>
@@ -176,7 +219,7 @@
 </div>
 
 <div class="prose">
-<h2>The claim under test</h2>
+<h2 id="method">The claim under test</h2>
 <p>Most MCP servers wrap an entire platform: every endpoint becomes a tool, the model gets a
 40-tool surface, and orchestration is outsourced to the model — then everyone blames the model.
 FlowMCP inverts that: <strong>workflows are the tools.</strong> Each MCP tool is one named
@@ -222,7 +265,7 @@ temperature 0.</p>
 <figure>
   <div class="chart" id="chart-tokens"></div>
   <figcaption>Prompt + completion tokens, averaged over all runs in the cell. The 35-tool
-  definitions cost ~3.5K prompt tokens per agentic round, every round.</figcaption>
+definitions cost ~3.5K prompt tokens per agentic round, every round.</figcaption>
 </figure>
 
 <h2>Results <span>— the six-condition ladder</span></h2>
@@ -230,78 +273,98 @@ temperature 0.</p>
 <figure>
   <div class="chart" id="chart-ladder"></div>
   <figcaption>Aggregate success over the three shared tasks, 48 runs per condition
-  (E2 = E1's cells with up to three repair attempts). Right-hand figures: average
-  model tokens per run — E1's authoring cost is paid once; replay of a captured
-  script or compiled flow costs zero.</figcaption>
+(E2 = E1's cells with up to three repair attempts). Right-hand figures: average
+model tokens per run — E1's authoring cost is paid once; replay of a captured
+script or compiled flow costs zero.</figcaption>
 </figure>
 
-<h2>Full results</h2>
-<div class="tblwrap"><table>
-  <thead><tr>
-    <th>model</th>
-    <th class="ca">A success</th><th>right tool</th><th>calls</th><th>tokens</th><th>sec</th>
-    <th class="cb">B success</th><th>calls</th><th>tokens</th><th>sec</th>
-  </tr></thead>
-  <tbody>
-    <tr><td>qwen2.5:7b</td><td class="ca good">6/6</td><td>100%</td><td>1.0</td><td>878</td><td>2.3</td><td class="cb">0/6</td><td>3.2</td><td>6,768</td><td>2.7</td></tr>
-    <tr><td>mistral:7b-instruct</td><td class="ca">4/6</td><td>33%</td><td>1.0</td><td>778</td><td>6.4</td><td class="cb">0/6</td><td>0.0</td><td>2,952</td><td>7.8</td></tr>
-    <tr><td>llama3.1:8b</td><td class="ca">2/6</td><td>100%</td><td>2.0</td><td>1,184</td><td>13.9</td><td class="cb">0/6</td><td>1.0</td><td>2,316</td><td>14.9</td></tr>
-    <tr><td>qwen3.5:9b</td><td class="ca good">6/6</td><td>100%</td><td>1.0</td><td>1,504</td><td>5.9</td><td class="cb">0/6</td><td>7.7</td><td>14,759</td><td>14.7</td></tr>
-    <tr><td>gemma4:12b</td><td class="ca good">6/6</td><td>100%</td><td>1.0</td><td>962</td><td>19.0</td><td class="cb">2/6</td><td>6.3</td><td>10,419</td><td>48.5</td></tr>
-    <tr><td>gpt-oss:20b</td><td class="ca">5/6</td><td>83%</td><td>0.8</td><td>789</td><td>13.0</td><td class="cb">0/6</td><td>5.0</td><td>11,099</td><td>60.4</td></tr>
-    <tr><td>qwen3.6:35b (DGX Spark)</td><td class="ca">4/6</td><td>67%</td><td>0.7</td><td>1,056</td><td>85.9</td><td class="cb">2/6</td><td>13.0</td><td>17,415</td><td>30.9</td></tr>
-    <tr><td>deepseek-v4-flash (vLLM)*</td><td class="ca">5/6</td><td>83%</td><td>1.2</td><td>1,476</td><td>11.4</td><td class="cb">1/6</td><td>25.5</td><td>37,309</td><td>116.2</td></tr>
-  </tbody>
-</table></div>
-<p class="prose" style="font-size:.82rem;color:var(--ink-3)">* DeepSeek and all condition C/D
+<h2 id="full-results">Full results</h2>
+<p class="prose" style="font-size:.85rem;color:var(--ink-2);max-width:44rem">The two charts above are the aggregate picture. The tables below back every number in this report — open them if you want to check a specific model or run.</p>
+
+<details class="detail">
+  <summary><span>Per-model results, condition A vs B (8 models, 6 runs each)</span><span class="hint">click to expand</span></summary>
+  <div class="detail-body">
+    <div class="tblwrap"><table>
+      <thead><tr>
+        <th>model</th>
+        <th class="ca">A success</th><th>right tool</th><th>calls</th><th>tokens</th><th>sec</th>
+        <th class="cb">B success</th><th>calls</th><th>tokens</th><th>sec</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>qwen2.5:7b</td><td class="ca good">6/6</td><td>100%</td><td>1.0</td><td>878</td><td>2.3</td><td class="cb">0/6</td><td>3.2</td><td>6,768</td><td>2.7</td></tr>
+        <tr><td>mistral:7b-instruct</td><td class="ca">4/6</td><td>33%</td><td>1.0</td><td>778</td><td>6.4</td><td class="cb">0/6</td><td>0.0</td><td>2,952</td><td>7.8</td></tr>
+        <tr><td>llama3.1:8b</td><td class="ca">2/6</td><td>100%</td><td>2.0</td><td>1,184</td><td>13.9</td><td class="cb">0/6</td><td>1.0</td><td>2,316</td><td>14.9</td></tr>
+        <tr><td>qwen3.5:9b</td><td class="ca good">6/6</td><td>100%</td><td>1.0</td><td>1,504</td><td>5.9</td><td class="cb">0/6</td><td>7.7</td><td>14,759</td><td>14.7</td></tr>
+        <tr><td>gemma4:12b</td><td class="ca good">6/6</td><td>100%</td><td>1.0</td><td>962</td><td>19.0</td><td class="cb">2/6</td><td>6.3</td><td>10,419</td><td>48.5</td></tr>
+        <tr><td>gpt-oss:20b</td><td class="ca">5/6</td><td>83%</td><td>0.8</td><td>789</td><td>13.0</td><td class="cb">0/6</td><td>5.0</td><td>11,099</td><td>60.4</td></tr>
+        <tr><td>qwen3.6:35b (DGX Spark)</td><td class="ca">4/6</td><td>67%</td><td>0.7</td><td>1,056</td><td>85.9</td><td class="cb">2/6</td><td>13.0</td><td>17,415</td><td>30.9</td></tr>
+        <tr><td>deepseek-v4-flash (vLLM)*</td><td class="ca">5/6</td><td>83%</td><td>1.2</td><td>1,476</td><td>11.4</td><td class="cb">1/6</td><td>25.5</td><td>37,309</td><td>116.2</td></tr>
+      </tbody>
+    </table></div>
+    <p style="font-size:.82rem;color:var(--ink-3);margin-top:.9rem">* DeepSeek and all condition C/D
 runs used a 2,048-token generation cap per request; waves 1–2 (the other A/B rows) ran
 uncapped. The cap only bounds runaway generations — it explains why capped models avoid the
 240s deliberation timeouts seen uncapped.</p>
+  </div>
+</details>
 
-<h2>Conditions C and D <span>— per model</span></h2>
-<div class="tblwrap"><table>
-  <thead><tr>
-    <th>model</th>
-    <th class="cb">C success</th><th>C tokens</th>
-    <th class="ca">D success</th><th>D tokens</th><th>D first-call flow (of 8)*</th>
-  </tr></thead>
-  <tbody>
-    <tr><td>qwen2.5:7b</td><td class="cb">0/6</td><td>2,138</td><td class="ca good">10/10</td><td>4,457</td><td>8/8</td></tr>
-    <tr><td>mistral:7b-instruct</td><td class="cb">0/6</td><td>788</td><td class="ca">0/10</td><td>3,038</td><td>0/8</td></tr>
-    <tr><td>llama3.1:8b</td><td class="cb">0/6</td><td>726</td><td class="ca">6/10</td><td>2,876</td><td>8/8</td></tr>
-    <tr><td>qwen3.5:9b</td><td class="cb">2/6</td><td>9,640</td><td class="ca">8/10</td><td>6,076</td><td>8/8</td></tr>
-    <tr><td>gemma4:12b</td><td class="cb">0/6</td><td>4,237</td><td class="ca good">10/10</td><td>5,521</td><td>8/8</td></tr>
-    <tr><td>gpt-oss:20b</td><td class="cb">0/6</td><td>5,152</td><td class="ca">2/10</td><td>3,362</td><td>6/8</td></tr>
-    <tr><td>qwen3.6:35b</td><td class="cb">2/6</td><td>7,223</td><td class="ca good">10/10</td><td>6,695</td><td>8/8</td></tr>
-    <tr><td>deepseek-v4-flash</td><td class="cb">1/6</td><td>18,231</td><td class="ca">7/10</td><td>9,862</td><td>2/8</td></tr>
-  </tbody>
-</table></div>
+<details class="detail">
+  <summary><span>Conditions C and D — per model</span><span class="hint">tool search, and flows+primitives combined</span></summary>
+  <div class="detail-body">
+    <div class="tblwrap"><table>
+      <thead><tr>
+        <th>model</th>
+        <th class="cb">C success</th><th>C tokens</th>
+        <th class="ca">D success</th><th>D tokens</th><th>D first-call flow (of 8)*</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>qwen2.5:7b</td><td class="cb">0/6</td><td>2,138</td><td class="ca good">10/10</td><td>4,457</td><td>8/8</td></tr>
+        <tr><td>mistral:7b-instruct</td><td class="cb">0/6</td><td>788</td><td class="ca">0/10</td><td>3,038</td><td>0/8</td></tr>
+        <tr><td>llama3.1:8b</td><td class="cb">0/6</td><td>726</td><td class="ca">6/10</td><td>2,876</td><td>8/8</td></tr>
+        <tr><td>qwen3.5:9b</td><td class="cb">2/6</td><td>9,640</td><td class="ca">8/10</td><td>6,076</td><td>8/8</td></tr>
+        <tr><td>gemma4:12b</td><td class="cb">0/6</td><td>4,237</td><td class="ca good">10/10</td><td>5,521</td><td>8/8</td></tr>
+        <tr><td>gpt-oss:20b</td><td class="cb">0/6</td><td>5,152</td><td class="ca">2/10</td><td>3,362</td><td>6/8</td></tr>
+        <tr><td>qwen3.6:35b</td><td class="cb">2/6</td><td>7,223</td><td class="ca good">10/10</td><td>6,695</td><td>8/8</td></tr>
+        <tr><td>deepseek-v4-flash</td><td class="cb">1/6</td><td>18,231</td><td class="ca">7/10</td><td>9,862</td><td>2/8</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</details>
 
-<h2>Condition E <span>— per model</span></h2>
-<div class="tblwrap"><table>
-  <thead><tr>
-    <th>model</th><th class="cb">E0 (no recipe)</th><th class="ca">E1 (recipe)</th><th>E1 tokens</th><th>E2 (repair)</th>
-  </tr></thead>
-  <tbody>
-    <tr><td>qwen2.5:7b</td><td class="cb">0/6</td><td class="ca good">6/6</td><td>2,013</td><td>5/6</td></tr>
-    <tr><td>mistral:7b-instruct</td><td class="cb">2/6</td><td class="ca good">6/6</td><td>2,452</td><td>5/6</td></tr>
-    <tr><td>llama3.1:8b</td><td class="cb">0/6</td><td class="ca">4/6</td><td>1,855</td><td>6/6</td></tr>
-    <tr><td>qwen3.5:9b</td><td class="cb">2/6</td><td class="ca good">6/6</td><td>3,014</td><td>6/6</td></tr>
-    <tr><td>gemma4:12b</td><td class="cb">2/6</td><td class="ca">4/6</td><td>2,565</td><td>4/6</td></tr>
-    <tr><td>gpt-oss:20b</td><td class="cb">2/6</td><td class="ca good">6/6</td><td>2,567</td><td>6/6</td></tr>
-    <tr><td>qwen3.6:35b</td><td class="cb">2/6</td><td class="ca good">6/6</td><td>2,295</td><td>6/6</td></tr>
-    <tr><td>deepseek-v4-flash</td><td class="cb">3/6</td><td class="ca good">6/6</td><td>2,167</td><td>6/6</td></tr>
-  </tbody>
-</table></div>
+<details class="detail">
+  <summary><span>Condition E — per model</span><span class="hint">code-mode: model writes a program instead of calling tools directly</span></summary>
+  <div class="detail-body">
+    <div class="tblwrap"><table>
+      <thead><tr>
+        <th>model</th><th class="cb">E0 (no recipe)</th><th class="ca">E1 (recipe)</th><th>E1 tokens</th><th>E2 (repair)</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>qwen2.5:7b</td><td class="cb">0/6</td><td class="ca good">6/6</td><td>2,013</td><td>5/6</td></tr>
+        <tr><td>mistral:7b-instruct</td><td class="cb">2/6</td><td class="ca good">6/6</td><td>2,452</td><td>5/6</td></tr>
+        <tr><td>llama3.1:8b</td><td class="cb">0/6</td><td class="ca">4/6</td><td>1,855</td><td>6/6</td></tr>
+        <tr><td>qwen3.5:9b</td><td class="cb">2/6</td><td class="ca good">6/6</td><td>3,014</td><td>6/6</td></tr>
+        <tr><td>gemma4:12b</td><td class="cb">2/6</td><td class="ca">4/6</td><td>2,565</td><td>4/6</td></tr>
+        <tr><td>gpt-oss:20b</td><td class="cb">2/6</td><td class="ca good">6/6</td><td>2,567</td><td>6/6</td></tr>
+        <tr><td>qwen3.6:35b</td><td class="cb">2/6</td><td class="ca good">6/6</td><td>2,295</td><td>6/6</td></tr>
+        <tr><td>deepseek-v4-flash</td><td class="cb">3/6</td><td class="ca good">6/6</td><td>2,167</td><td>6/6</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</details>
 
-<div class="tblwrap"><table>
-  <thead><tr><th>excluded model</th><th style="text-align:left">reason</th></tr></thead>
-  <tbody>
-    <tr><td>gemma3:4b</td><td style="text-align:left">Ollama build rejects the <code>tools</code> parameter — cannot function-call at all</td></tr>
-    <tr><td>phi4:14b</td><td style="text-align:left">same — <code>400: does not support tools</code> from the runtime</td></tr>
-    <tr><td>gpt-oss:20b (waves 1–2 only)</td><td style="text-align:left">model was broken on its host node (Ollama blob load failure → 500) and the gateway's fallback masked it as a 404; after a re-pull and gateway fix it joined in wave 3 — results above</td></tr>
-  </tbody>
-</table></div>
+<details class="detail">
+  <summary><span>Excluded models</span><span class="hint">why 2 of 10 model/runtime pairs don't appear above</span></summary>
+  <div class="detail-body">
+    <div class="tblwrap"><table>
+      <thead><tr><th>excluded model</th><th style="text-align:left">reason</th></tr></thead>
+      <tbody>
+        <tr><td>gemma3:4b</td><td style="text-align:left">Ollama build rejects the <code>tools</code> parameter — cannot function-call at all</td></tr>
+        <tr><td>phi4:14b</td><td style="text-align:left">same — <code>400: does not support tools</code> from the runtime</td></tr>
+        <tr><td>gpt-oss:20b (waves 1–2 only)</td><td style="text-align:left">model was broken on its host node (Ollama blob load failure → 500) and the gateway's fallback masked it as a 404; after a re-pull and gateway fix it joined in wave 3 — results above</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</details>
 
 <div class="prose">
 <div class="note"><strong>How to read the tables:</strong> the aggregates (A 38/48 = 79% vs
@@ -310,7 +373,7 @@ B 5/48 = 10% among function-calling models) are the claim. Per-model cells are n
 leaderboard. Intent-to-treat (counting the two models that cannot function-call at all):
 A 38/60 = 63%, B 5/60 = 8%.</div>
 
-<h2>What the data says</h2>
+<h2 id="findings">What the data says</h2>
 
 <h3>The unspecified primitive surface was unreliable at every tested size</h3>
 <p>No eligible model below 12B completed the primitive chain: <strong>0/24</strong>.
@@ -462,38 +525,43 @@ should advertise their defaults in a way reasoning models will trust.</p>
 compress the decision to one call, but not to zero. Tool-template support, not parameter
 count, is the first gate for local agent work.</p>
 
-<h2>What this doesn't prove</h2>
+<h2 id="doesnt-prove">What this doesn't prove</h2>
 <ul>
   <li>Five tasks, two trials per cell, one gateway, quantized local builds — this is a strong
-  signal, not a paper. n is small and the variance on 4/6-vs-6/6 cells is real.</li>
+signal, not a paper. n is small and the variance on 4/6-vs-6/6 cells is real.</li>
   <li>Three of five tasks map one-to-one onto existing flows — that's the product's premise
-  (you ship flows for your known workflows). Conditions C and D partially address this, but a
-  broader task suite with more no-flow and partial-flow asks would strengthen it.</li>
+(you ship flows for your known workflows). Conditions C and D partially address this, but a
+broader task suite with more no-flow and partial-flow asks would strengthen it.</li>
   <li>Condition B/C/D/R agent loops are plain tools loops; a heavily scaffolded agent
-  (planner/critic, retries) would score better — by spending even more tokens.</li>
+(planner/critic, retries) would score better — by spending even more tokens.</li>
   <li>The raw surface is not impossible — DeepSeek went 1/6 on B — it is low-reliability and
-  extremely expensive.</li>
+extremely expensive.</li>
 </ul>
 
 <h2>Method notes &amp; reproducibility</h2>
-<ul>
-  <li>Harness commits: waves 1–2 at <span class="mono">cf56b01</span>, wave 3 at
-  <span class="mono">5ce273e</span>, wave 4 (C/D) at <span class="mono">847bbf8</span>,
-  wave 5 (R) at <span class="mono">8d464e9</span>, wave E final at
-  <span class="mono">7e4e5b7</span> (a schema-less wave-E run at
-  <span class="mono">6871c9d</span> is superseded: undocumented response shapes unfairly
-  failed valid scripts — retained in raw).
-  Raw per-run results JSON, full message transcripts for waves 4–5, code-mode results, and the 101 captured successful scripts are committed under <span class="mono">bench/results/</span> (waves 1–3 predate transcript capture).</li>
-  <li>Generation caps: waves 1–2 uncapped; waves 3–5 capped at 2,048 tokens per request
-  (bounds runaway deliberation; noted where it affects comparability).</li>
-  <li>Temperature 0 everywhere. The gateway does not expose sampling seeds — that is the
-  extent of the determinism control.</li>
-  <li>Populations: eligible = 8 function-calling models (aggregates above); intent-to-treat
-  adds the two models whose runtimes reject the <code>tools</code> parameter.</li>
-  <li>Round limit: 12 agentic rounds per run; hitting it is recorded as failure with cause.</li>
-</ul>
+<details class="detail">
+  <summary><span>Harness commits, generation caps, and population definitions</span><span class="hint">for reproducing the runs</span></summary>
+  <div class="detail-body">
+    <ul style="margin-top:.9rem">
+      <li>Harness commits: waves 1–2 at <span class="mono">cf56b01</span>, wave 3 at
+      <span class="mono">5ce273e</span>, wave 4 (C/D) at <span class="mono">847bbf8</span>,
+    wave 5 (R) at <span class="mono">8d464e9</span>, wave E final at
+      <span class="mono">7e4e5b7</span> (a schema-less wave-E run at
+      <span class="mono">6871c9d</span> is superseded: undocumented response shapes unfairly
+    failed valid scripts — retained in raw).
+    Raw per-run results JSON, full message transcripts for waves 4–5, code-mode results, and the 101 captured successful scripts are committed under <span class="mono">bench/results/</span> (waves 1–3 predate transcript capture).</li>
+      <li>Generation caps: waves 1–2 uncapped; waves 3–5 capped at 2,048 tokens per request
+    (bounds runaway deliberation; noted where it affects comparability).</li>
+      <li>Temperature 0 everywhere. The gateway does not expose sampling seeds — that is the
+    extent of the determinism control.</li>
+      <li>Populations: eligible = 8 function-calling models (aggregates above); intent-to-treat
+    adds the two models whose runtimes reject the <code>tools</code> parameter.</li>
+      <li>Round limit: 12 agentic rounds per run; hitting it is recorded as failure with cause.</li>
+    </ul>
+  </div>
+</details>
 
-<h2>Related work</h2>
+<h2 id="related">Related work</h2>
 <p>None of the architectural ideas here are new, and their convergent reinvention in 2026 is
 evidence for the thesis, not against it. The core design — an agent produces a declarative
 workflow artifact once, a deterministic engine executes it thereafter — appears in
@@ -524,16 +592,15 @@ have not yet computed.</p>
 <ul>
   <li>A script→flow compiler: the 101 captured code-mode scripts are a starter corpus for mechanically compiling successful programs into governed flows.</li>
   <li>A broader task suite: more decline and partial-match shapes, tasks with no flow
-  coverage at all, and more trials per cell.</li>
+coverage at all, and more trials per cell.</li>
   <li>Host-mediated confirmation UX for write flows — turning the v0.3 two-phase protocol
-  into a genuine human gate.</li>
+into a genuine human gate.</li>
 </ul>
-
 </div>
 
 <footer>
-  FlowMCP benchmark · 2026-07-31 · harness at <a href="https://github.com/PeterGreenAppliedAI/FlowMCP">PeterGreenAppliedAI/FlowMCP</a> <span class="mono">bench/run.ts</span> ·
-  conditions share fixture ground truth; condition A drives the real server over stdio JSON-RPC · fully reproducible: <span class="mono">npx tsx bench/run.ts</span>
+FlowMCP benchmark · 2026-07-31 · harness at <a href="https://github.com/PeterGreenAppliedAI/FlowMCP">PeterGreenAppliedAI/FlowMCP</a> <span class="mono">bench/run.ts</span> ·
+conditions share fixture ground truth; condition A drives the real server over stdio JSON-RPC · fully reproducible: <span class="mono">npx tsx bench/run.ts</span>
 </footer>
 </div>
 
@@ -541,18 +608,17 @@ have not yet computed.</p>
 
 <script>
   const DATA = [
-    { m: 'qwen2.5:7b',          size: '7B',  a: {s: 6, calls: 1.0, tok: 878,   sec: 2.3},  b: {s: 0, calls: 3.2,  tok: 6768,  sec: 2.7} },
-    { m: 'mistral:7b-instruct', size: '7B',  a: {s: 4, calls: 1.0, tok: 778,   sec: 6.4},  b: {s: 0, calls: 0.0,  tok: 2952,  sec: 7.8} },
-    { m: 'llama3.1:8b',         size: '8B',  a: {s: 2, calls: 2.0, tok: 1184,  sec: 13.9}, b: {s: 0, calls: 1.0,  tok: 2316,  sec: 14.9} },
-    { m: 'qwen3.5:9b',          size: '9B',  a: {s: 6, calls: 1.0, tok: 1504,  sec: 5.9},  b: {s: 0, calls: 7.7,  tok: 14759, sec: 14.7} },
-    { m: 'gemma4:12b',          size: '12B', a: {s: 6, calls: 1.0, tok: 962,   sec: 19.0}, b: {s: 2, calls: 6.3,  tok: 10419, sec: 48.5} },
-    { m: 'gpt-oss:20b',         size: '20B', a: {s: 5, calls: 0.8, tok: 789,   sec: 13.0}, b: {s: 0, calls: 5.0,  tok: 11099, sec: 60.4} },
-    { m: 'qwen3.6:35b',         size: '35B · DGX Spark', a: {s: 4, calls: 0.7, tok: 1056, sec: 85.9}, b: {s: 2, calls: 13.0, tok: 17415, sec: 30.9} },
-    { m: 'deepseek-v4-flash',   size: 'DGX Spark · vLLM', a: {s: 5, calls: 1.2, tok: 1476, sec: 11.4}, b: {s: 1, calls: 25.5, tok: 37309, sec: 116.2} },
+    { m: 'qwen2.5:7b', size: '7B', a: {s: 6, calls: 1.0, tok: 878, sec: 2.3}, b: {s: 0, calls: 3.2, tok: 6768, sec: 2.7} },
+    { m: 'mistral:7b-instruct', size: '7B', a: {s: 4, calls: 1.0, tok: 778, sec: 6.4}, b: {s: 0, calls: 0.0, tok: 2952, sec: 7.8} },
+    { m: 'llama3.1:8b', size: '8B', a: {s: 2, calls: 2.0, tok: 1184, sec: 13.9}, b: {s: 0, calls: 1.0, tok: 2316, sec: 14.9} },
+    { m: 'qwen3.5:9b', size: '9B', a: {s: 6, calls: 1.0, tok: 1504, sec: 5.9}, b: {s: 0, calls: 7.7, tok: 14759, sec: 14.7} },
+    { m: 'gemma4:12b', size: '12B', a: {s: 6, calls: 1.0, tok: 962, sec: 19.0}, b: {s: 2, calls: 6.3, tok: 10419, sec: 48.5} },
+    { m: 'gpt-oss:20b', size: '20B', a: {s: 5, calls: 0.8, tok: 789, sec: 13.0}, b: {s: 0, calls: 5.0, tok: 11099, sec: 60.4} },
+    { m: 'qwen3.6:35b', size: '35B · DGX Spark', a: {s: 4, calls: 0.7, tok: 1056, sec: 85.9}, b: {s: 2, calls: 13.0, tok: 17415, sec: 30.9} },
+    { m: 'deepseek-v4-flash', size: 'DGX Spark · vLLM', a: {s: 5, calls: 1.2, tok: 1476, sec: 11.4}, b: {s: 1, calls: 25.5, tok: 37309, sec: 116.2} },
   ];
   const tip = document.getElementById('tip');
   const fmt = new Intl.NumberFormat('en-US');
-
   function bar(cls, widthPct, valText, tipText) {
     const row = document.createElement('div');
     row.className = 'barrow';
@@ -567,7 +633,6 @@ have not yet computed.</p>
     row.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
     return row;
   }
-
   function group(d, mkA, mkB) {
     const g = document.createElement('div');
     g.className = 'grp';
@@ -583,7 +648,6 @@ have not yet computed.</p>
     g.append(name, plot);
     return g;
   }
-
   const sc = document.getElementById('chart-success');
   DATA.forEach((d) => sc.append(group(d,
     (x) => bar('a', (x.a.s / 6) * 100 * 0.82, Math.round((x.a.s / 6) * 100) + '% (' + x.a.s + '/6)',
@@ -591,7 +655,6 @@ have not yet computed.</p>
     (x) => bar('b', (x.b.s / 6) * 100 * 0.82, Math.round((x.b.s / 6) * 100) + '% (' + x.b.s + '/6)',
       x.m + ' · primitive — ' + x.b.s + '/6 · ' + x.b.calls + ' calls · ' + fmt.format(x.b.tok) + ' tok · ' + x.b.sec + 's'),
   )));
-
   const MAXTOK = 37309;
   const tc = document.getElementById('chart-tokens');
   DATA.forEach((d) => tc.append(group(d,
@@ -600,9 +663,8 @@ have not yet computed.</p>
     (x) => bar('b', (x.b.tok / MAXTOK) * 100 * 0.82, fmt.format(x.b.tok),
       x.m + ' · primitive — ' + fmt.format(x.b.tok) + ' tokens avg/run'),
   )));
-
   const LADDER = [
-    { c: 'A · compiled flow', facade: true,  s: 38, tok: 1078 },
+    { c: 'A · compiled flow', facade: true, s: 38, tok: 1078 },
     { c: 'E1 · code + recipe', facade: false, s: 44, tok: 2366 },
     { c: 'E2 · code + repair', facade: false, s: 44, tok: 3172 },
     { c: 'R · textual recipe', facade: false, s: 36, tok: 12498 },
