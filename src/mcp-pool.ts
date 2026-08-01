@@ -140,7 +140,7 @@ class DownstreamServer {
     if (!admitted) {
       throw new Error(
         `tool '${tool}' on server '${this.name}' is not marked read-only ` +
-          `(annotations.readOnlyHint), not attested in 'readOnly', and not in 'allow' — ` +
+          `(annotations.readOnlyHint), not attested in 'readOnly', and not in its allow list — ` +
           `flows are read-only by default`,
       );
     }
