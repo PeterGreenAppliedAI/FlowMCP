@@ -18,7 +18,7 @@ import { executeFlow, resumeFlow, FlowError, type PendingFlow } from './engine.j
 import { McpPool, PROTOCOL_REVISIONS } from './mcp-pool.js';
 import type { Flow } from './flow-schema.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const APPROVAL_TTL_MS = 5 * 60_000;
 // Our surface (initialize / tools/list / tools/call / ping) is unchanged across
 // these revisions; echo the client's requested version when we know it.
@@ -37,6 +37,30 @@ interface ServerState {
   effects: Map<string, FlowEffects>;
   writeGates: Map<string, Set<string>>;
   approvals: Map<string, PendingApproval>;
+  clientElicitation: boolean;
+}
+
+// Server-initiated requests (elicitation). Responses are routed OUTSIDE the
+// serial request queue — a queued response while tools/call awaits it would
+// deadlock.
+const pendingOutgoing = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+let outgoingSeq = 0;
+
+interface ElicitResult { action: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown> }
+
+function elicit(message: string, requestedSchema: Record<string, unknown>, timeoutMs = APPROVAL_TTL_MS): Promise<ElicitResult> {
+  const id = `elicit-${++outgoingSeq}`;
+  send({ jsonrpc: '2.0', id, method: 'elicitation/create', params: { message, requestedSchema } });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingOutgoing.delete(id);
+      reject(new Error('elicitation timed out (no response from the client)'));
+    }, timeoutMs);
+    pendingOutgoing.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v as ElicitResult); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
+  });
 }
 
 interface JsonRpcRequest {
@@ -115,6 +139,25 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
     if (confirm !== undefined) {
       return await confirmedCall(state, flow, String(confirm));
     }
+    // Structural ask-the-user: missing required parameters are elicited from
+    // the client when it advertises the capability, instead of erroring.
+    if (state.clientElicitation) {
+      const missing = Object.entries(flow.input).filter(([k, p]) => p.required && args[k] === undefined);
+      if (missing.length) {
+        const res = await elicit(
+          `'${flow.name}' needs ${missing.length} more value(s) to run.`,
+          {
+            type: 'object',
+            properties: Object.fromEntries(missing.map(([k, p]) => [k, { type: p.type, description: p.description }])),
+            required: missing.map(([k]) => k),
+          },
+        );
+        if (res.action !== 'accept' || !res.content) {
+          return { content: [{ type: 'text', text: `Cancelled: required input for '${flow.name}' was not provided.` }], isError: true };
+        }
+        Object.assign(args, res.content);
+      }
+    }
     const gate = state.writeGates.get(flow.name);
     const run = await executeFlow(flow, args, {
       mcp: state.pool,
@@ -122,6 +165,24 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
     });
     if (run.status === 'complete') {
       return { content: [{ type: 'text', text: run.text }] };
+    }
+    // Write pause. With elicitation, the host mediates the approval — the
+    // model never holds a consumable token. Without it, fall back to the
+    // v0.3 two-phase confirmation protocol.
+    if (state.clientElicitation) {
+      const res = await elicit(
+        `${run.proposalText}\n\nApprove executing the write step(s) of '${flow.name}'? Nothing has been written yet.`,
+        {
+          type: 'object',
+          properties: { approve: { type: 'boolean', description: 'true to execute the proposed writes' } },
+          required: ['approve'],
+        },
+      );
+      if (res.action !== 'accept' || res.content?.approve !== true) {
+        return { content: [{ type: 'text', text: `Declined: '${flow.name}' was not approved. Nothing was written.` }] };
+      }
+      const resumed = await resumeFlow(flow, run.pending, { mcp: state.pool });
+      return { content: [{ type: 'text', text: resumed.status === 'complete' ? resumed.text : '' }] };
     }
     const token = randomUUID();
     state.approvals.set(token, {
@@ -180,6 +241,8 @@ async function dispatch(state: ServerState, req: JsonRpcRequest): Promise<unknow
   switch (req.method) {
     case 'initialize': {
       const requested = params.protocolVersion;
+      const caps = params.capabilities as { elicitation?: unknown } | undefined;
+      state.clientElicitation = caps?.elicitation !== undefined;
       return {
         protocolVersion:
           typeof requested === 'string' && SUPPORTED_PROTOCOLS.has(requested)
@@ -216,7 +279,7 @@ async function main(): Promise<void> {
     checkServerRefs(flows, new Set(Object.keys(servers)));
     const effects = new Map(flows.map((f) => [f.name, flowEffects(f, servers)]));
     const writeGates = new Map(flows.map((f) => [f.name, topLevelWriteStepIds(f, servers)]));
-    state = { flows, pool: new McpPool(servers), effects, writeGates, approvals: new Map() };
+    state = { flows, pool: new McpPool(servers), effects, writeGates, approvals: new Map(), clientElicitation: false };
     log(`loaded ${flows.length} flows from ${dir}: ${flows.map((f) => f.name).join(', ')}`);
     const serverNames = Object.keys(servers);
     if (serverNames.length) log(`downstream MCP servers: ${serverNames.join(', ')}`);
@@ -250,6 +313,17 @@ async function main(): Promise<void> {
   let queue = Promise.resolve();
   rl.on('line', (line) => {
     if (!line.trim()) return;
+    // Responses to server-initiated requests bypass the serial queue.
+    try {
+      const peek = JSON.parse(line) as { id?: string | number; method?: string; result?: unknown; error?: { message?: string } };
+      if (peek.method === undefined && peek.id !== undefined && pendingOutgoing.has(String(peek.id))) {
+        const pending = pendingOutgoing.get(String(peek.id))!;
+        pendingOutgoing.delete(String(peek.id));
+        if (peek.error) pending.reject(new Error(peek.error.message ?? 'elicitation error'));
+        else pending.resolve(peek.result);
+        return;
+      }
+    } catch { /* fall through to normal handling */ }
     queue = queue.then(() => handleLine(state, line));
   });
   rl.on('close', () => {

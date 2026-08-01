@@ -80,7 +80,9 @@ export function spawnServer(
 
 interface RpcResponse {
   jsonrpc: '2.0';
-  id: number;
+  id: number | string;
+  method?: string;
+  params?: Record<string, unknown>;
   result?: Record<string, unknown>;
   error?: { code: number; message: string };
 }
@@ -91,6 +93,9 @@ export class RpcClient {
   private pending = new Map<number, (msg: RpcResponse) => void>();
   private buffer = '';
   stderr = '';
+  /** Handler for SERVER-initiated requests (e.g. elicitation/create); the
+   *  returned value is sent back as the response result. */
+  onServerRequest?: (method: string, params: Record<string, unknown>) => unknown;
 
   constructor(private child: ChildProcessWithoutNullStreams) {
     child.stdout.on('data', (chunk: Buffer) => {
@@ -101,8 +106,14 @@ export class RpcClient {
         this.buffer = this.buffer.slice(idx + 1);
         if (!line.trim()) continue;
         const msg = JSON.parse(line) as RpcResponse;
-        this.pending.get(msg.id)?.(msg);
-        this.pending.delete(msg.id);
+        if (msg.method !== undefined && msg.id !== undefined) {
+          // server-initiated request → answer via the handler
+          const result = this.onServerRequest?.(msg.method, msg.params ?? {});
+          this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\n');
+          continue;
+        }
+        this.pending.get(msg.id as number)?.(msg);
+        this.pending.delete(msg.id as number);
       }
     });
     child.stderr.on('data', (chunk: Buffer) => {

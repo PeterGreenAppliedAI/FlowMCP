@@ -1,4 +1,4 @@
-# The FlowMCP flow format — v0.3
+# The FlowMCP flow format — v0.5
 
 This document specifies `.flow.json5` as a **portable contract**, independent of
 the FlowMCP server that happens to execute it. The claim: a workflow worth
@@ -8,7 +8,7 @@ successful tool-use trace); any runtime that implements this spec can *serve*
 it; any model can *call* it. The format is the interface between those parties.
 
 Versioning: this spec is versioned with the FlowMCP release that implements it
-(currently **0.3**). Additions are backward-compatible within a major version;
+(currently **0.5**). Additions are backward-compatible within a major version;
 a flow file needs no version marker until a breaking change ships, at which
 point a top-level `format` field will be introduced.
 
@@ -155,12 +155,17 @@ One confirmation covers one flow run: after it, the remaining steps —
 including multiple writes — execute without further pauses. If per-write
 granularity matters, split the flow.
 
-**What this is, precisely:** a two-phase confirmation protocol, not a
-guaranteed human gate. The caller that receives the token can confirm
-autonomously. The pause is the *surface* where a human gate can be built: an
-MCP host that mediates tool calls can intercept the proposal, show it to a
-person, and only forward the confirmation on their approval. Runtimes must not
-describe this mechanism as "human approval" unless such mediation is in place.
+**Elicitation upgrade (v0.5):** when the client declares the `elicitation`
+capability at initialize, the write pause is mediated through the HOST
+instead: the server sends `elicitation/create` with the proposal and an
+`{approve: boolean}` schema, and only an accepted `approve: true` resumes the
+writes — the model never holds a consumable token. The same mechanism asks
+the user for missing required parameters (structural ask-the-user) before
+execution. Honest boundary: gate quality equals host quality — the spec
+intends elicitations be presented to a person, and a host that auto-answers
+them reduces this to the token protocol's guarantees. Without the capability,
+the v0.3 two-phase token protocol applies unchanged: a confirmation
+checkpoint, not a guaranteed human gate.
 
 ## Reserved for future versions
 
