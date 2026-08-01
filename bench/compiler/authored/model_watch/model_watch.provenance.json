@@ -1,0 +1,14 @@
+{
+  "source": "authored from intent",
+  "flowName": "model_watch",
+  "warnings": [],
+  "droppedCalls": [],
+  "dedupedCalls": [],
+  "nodes": 2,
+  "intent": "Given a model name, search for the latest news and community discussion about the AI model \"Qwen\" from the past week, and return a markdown report listing each finding as a bullet with title, url, and a short snippet. Search at least twice with different phrasings (news, discussion).",
+  "model": "dgx-spark2-vllm/deepseek-v4-flash",
+  "modelTokens": 699,
+  "toolMap": {
+    "searxng_search": "searxng"
+  }
+}
