@@ -2,6 +2,16 @@
 // auth, and — like most production SaaS MCPs — NO annotations on any tool.
 // Mixed read/write surface (Business Central / Shopify shaped). Standalone:
 //   ERP_PORT=0 npx tsx test/fixtures/erp-http-mcp.ts  (prints chosen port)
+//
+// Production behaviors deliberately modeled so the client can be proven
+// against them (a mock that never misbehaves cannot detect regressions):
+//   - REAL session lifecycle: initialize issues an Mcp-Session-Id, every
+//     later request must present a live one (404 otherwise), DELETE
+//     terminates it, and POST /expire-sessions force-expires server-side.
+//   - PAGINATED tools/list: two pages via nextCursor — attested tools on
+//     page 2 are invisible to a client that only reads page 1.
+//   - CREDENTIAL REFLECTION: reflect_500 echoes the Authorization header in
+//     its error body, the way misconfigured proxies and debug pages do.
 import { createServer } from 'node:http';
 
 const TOKEN = process.env.ERP_TOKEN ?? 'test-token-123';
@@ -25,12 +35,18 @@ const TOOLS = [
   { name: 'flaky_500', description: 'Backend that is currently broken', inputSchema: { type: 'object', properties: {} } },
   { name: 'list_customers', description: 'List all customers', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_customer', description: 'Get one customer by id', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  // ---- page 2 (attested/allowed tools live here on purpose) ----
   { name: 'list_overdue_invoices', description: 'Invoices overdue by at least N days', inputSchema: { type: 'object', properties: { days: { type: 'number' } } } },
   { name: 'create_order', description: 'Create a sales order (WRITE)', inputSchema: { type: 'object', properties: { customer: { type: 'string' } } } },
   { name: 'post_invoice', description: 'Post an invoice to the ledger (WRITE)', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'reflect_500', description: 'Broken backend whose error page echoes request headers', inputSchema: { type: 'object', properties: {} } },
 ];
+const TOOLS_PAGE_SIZE = 4;
 
 let postedInvoices = 0;
+let sessionSeq = 0;
+let terminatedSessions = 0;
+const sessions = new Set<string>();
 
 function call(name: string, args: Record<string, unknown>): { text: string; isError?: boolean } {
   switch (name) {
@@ -57,9 +73,26 @@ function call(name: string, args: Record<string, unknown>): { text: string; isEr
 }
 
 const server = createServer((req, res) => {
-  if (req.url === '/posted-count') { // test observability side-channel
+  // test observability side-channels (no auth, no session)
+  if (req.url === '/posted-count') {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ posted: postedInvoices }));
+    return;
+  }
+  if (req.url === '/session-count') {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ active: sessions.size, terminated: terminatedSessions }));
+    return;
+  }
+  if (req.url === '/expire-sessions') { // server-side session expiry, forced
+    sessions.clear();
+    res.end('expired');
+    return;
+  }
+  if (req.method === 'DELETE') { // MCP session termination
+    const sid = String(req.headers['mcp-session-id'] ?? '');
+    if (sessions.delete(sid)) { terminatedSessions++; res.statusCode = 200; res.end(); }
+    else { res.statusCode = 404; res.end('session not found'); }
     return;
   }
   if (req.method !== 'POST') { res.statusCode = 405; res.end(); return; }
@@ -68,19 +101,34 @@ const server = createServer((req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
-    const msg = JSON.parse(body) as { id?: number; method: string; params?: { protocolVersion?: string; name?: string; arguments?: Record<string, unknown> } };
-    const reply = (result: unknown) => {
+    const msg = JSON.parse(body) as { id?: number; method: string; params?: { protocolVersion?: string; name?: string; cursor?: string; arguments?: Record<string, unknown> } };
+    const reply = (result: unknown, sessionId?: string) => {
       res.setHeader('content-type', 'application/json');
-      res.setHeader('mcp-session-id', 'erp-session-1');
+      if (sessionId) res.setHeader('mcp-session-id', sessionId);
       res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }));
     };
-    if (msg.id === undefined) { res.statusCode = 202; res.end(); return; }
     if (msg.method === 'initialize') {
-      reply({ protocolVersion: msg.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'erp-mock', version: '1' } });
-    } else if (msg.method === 'tools/list') {
-      reply({ tools: TOOLS }); // deliberately NO annotations — production reality
+      const sid = `erp-session-${++sessionSeq}`;
+      sessions.add(sid);
+      reply({ protocolVersion: msg.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'erp-mock', version: '1' } }, sid);
+      return;
+    }
+    // every non-initialize request needs a LIVE session — like production
+    const sid = String(req.headers['mcp-session-id'] ?? '');
+    if (!sessions.has(sid)) { res.statusCode = 404; res.end('session not found or expired'); return; }
+    if (msg.id === undefined) { res.statusCode = 202; res.end(); return; }
+    if (msg.method === 'tools/list') {
+      // deliberately NO annotations — production reality; and PAGINATED
+      const start = msg.params?.cursor === 'page-2' ? TOOLS_PAGE_SIZE : 0;
+      const page = TOOLS.slice(start, start + TOOLS_PAGE_SIZE);
+      reply({ tools: page, ...(start + TOOLS_PAGE_SIZE < TOOLS.length ? { nextCursor: 'page-2' } : {}) });
     } else if (msg.method === 'tools/call') {
       if (msg.params?.name === 'flaky_500') { res.statusCode = 500; res.end('internal error'); return; }
+      if (msg.params?.name === 'reflect_500') {
+        res.statusCode = 500;
+        res.end(`internal error; request was: Authorization: ${req.headers.authorization ?? '(none)'}`);
+        return;
+      }
       const r = call(msg.params?.name ?? '', msg.params?.arguments ?? {});
       reply({ content: [{ type: 'text', text: r.text }], ...(r.isError ? { isError: true } : {}) });
     } else {

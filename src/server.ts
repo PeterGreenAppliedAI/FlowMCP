@@ -27,7 +27,7 @@ import {
   type Registry,
 } from './registry.js';
 
-const VERSION = '0.9.1';
+const VERSION = '0.9.2';
 const APPROVAL_TTL_MS = 5 * 60_000;
 // Our surface (initialize / tools/list / tools/call / ping) is unchanged across
 // these revisions; echo the client's requested version when we know it.
@@ -417,11 +417,13 @@ async function main(): Promise<void> {
     queue = queue.then(() => handleLine(state, line));
   });
   rl.on('close', () => {
-    // Drain in-flight requests before exiting (stdin closes immediately for piped input).
-    void queue.then(() => {
-      state.pool.closeAll();
-      process.exit(0);
-    });
+    // Drain in-flight requests, then close downstreams ORDERLY (HTTP session
+    // termination is async) before exiting — stdin closes immediately for
+    // piped input, and process.exit would strand server-side sessions.
+    void queue
+      .then(() => state.pool.closeAll())
+      .catch(() => {})
+      .then(() => process.exit(0));
   });
 }
 

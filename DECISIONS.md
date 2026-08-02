@@ -2,6 +2,43 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-08-03 — a transport review found what green CI wasn't exercising
+
+**What didn't work:** five production paths in the remote transport, none
+covered by a passing 124-test suite. (1) A connection candidate that failed
+mid-handshake was never closed — three retries could leak three child
+processes (stdio) or three open sessions (HTTP), unbounded across backoff
+cycles. (2) An expired HTTP session poisoned the pooled client permanently:
+the SDK doesn't reinitialize on the MCP 404-session signal, the pool stayed
+`ready`, and every later call replayed the stale session. (3) The
+"never echoes the bearer token" test proved only that a *well-behaved* mock
+doesn't misbehave — the SDK puts downstream response bodies into error
+messages, so a proxy or debug page reflecting the Authorization header would
+have handed the credential to the model and stderr, and no fixture could
+produce that failure. (4) Both clients read only the first page of
+tools/list, so attested tools on later pages failed connect-time validation
+as "not present." (5) close() never terminated the server-side session
+(the SDK transport's terminateSession is separate from close), and sync
+close + immediate process.exit made orderly cleanup impossible.
+
+**The fix:** per-attempt candidate cleanup with promotion-only onClose
+wiring; session-invalidation detection that tears down and reconnects fresh
+on the next call (the failed call is never blindly retried — it may have
+been a write); an adapter-level redaction layer scrubbing every interpolated
+header value and secret-bearing URL component from all errors leaving
+src/downstream.ts; nextCursor loops in both clients; awaitable close →
+terminateSession (405 = compliant non-termination, 2s cap) with closeAll
+awaited before every process exit. The ERP mock got the misbehaviors the
+guarantees are about: real session lifecycle with forced expiry, two-page
+tools/list with attested tools on page 2, and a reflect_500 tool that echoes
+the Authorization header like a misconfigured proxy.
+
+**The lesson:** a guarantee is only as strong as the most hostile fixture
+that exercises it. A mock that cannot misbehave turns a security test into
+theater — the test asserted "token never echoed" while nothing in the
+test universe was *capable* of echoing it. Model the failure before
+claiming immunity to it.
+
 ## 2026-08-02 — the first external consumer's integration bill: three portability fixes
 
 **What didn't work:** the first real host to mount FlowMCP (LocalClaw's MCP

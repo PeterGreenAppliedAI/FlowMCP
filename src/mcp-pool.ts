@@ -117,8 +117,8 @@ class DownstreamServer {
     return result;
   }
 
-  close(): void {
-    this.teardown('pool closed');
+  close(): Promise<void> {
+    return this.teardown('pool closed');
   }
 
   private connect(deadline: number): Promise<void> {
@@ -134,20 +134,22 @@ class DownstreamServer {
     const attempts = this.opts.spawnAttempts ?? 3;
     let lastError: unknown;
     for (let i = 0; i < attempts; i++) {
+      // The candidate stays LOCAL until fully validated, and every failure
+      // path must close it — a thrown connect/listTools/validation otherwise
+      // leaks a child process (stdio) or an open session (HTTP) per attempt.
+      let candidate: DownstreamClient | undefined;
       try {
-        const client = createDownstreamClient(
+        candidate = createDownstreamClient(
           this.name,
           this.config.transport === 'http' ? this.config : { ...this.config, cwd: this.opts.baseDir },
         );
-        client.onClose = () => this.teardown('connection lost');
-        await client.connect(deadline);
-        const tools = await client.listTools(deadline);
+        await candidate.connect(deadline);
+        const tools = await candidate.listTools(deadline);
         // connect-time attestation validation: a misspelled or vanished
         // attested tool is a configuration error, not a silent no-op
         const names = new Set(tools.map((t) => t.name));
         const unknown = [...this.config.attestReadOnly, ...this.config.allow].filter((t) => !names.has(t));
         if (unknown.length) {
-          client.close();
           throw new Error(
             `server '${this.name}': attested/allowed tool(s) not present on the server: ${unknown.join(', ')} — re-check servers.json5`,
           );
@@ -167,20 +169,22 @@ class DownstreamServer {
               `flowmcp: [${this.name}] attestation unpinned — add attestHash: '${hash}' to servers.json5 to detect upstream schema drift\n`,
             );
           } else if (this.config.attestHash !== hash) {
-            client.close();
             throw new Error(
               `server '${this.name}': attested tool schemas changed upstream (attestHash mismatch: pinned ${this.config.attestHash}, current ${hash}) — re-review the tools and update attestHash`,
             );
           }
         }
-        this.client = client;
+        // promotion: only a fully validated candidate becomes the pooled
+        // client, and only then does its death trigger pool teardown
+        candidate.onClose = () => this.teardown('connection lost');
+        this.client = candidate;
         this.tools = new Map(tools.map((t) => [t.name, t]));
         this.ready = true;
         this.touchIdle();
         return;
       } catch (e) {
         lastError = e;
-        this.teardown('handshake failed');
+        if (candidate) await Promise.resolve(candidate.close()).catch(() => {});
         if (Date.now() >= deadline) break;
       }
     }
@@ -196,17 +200,18 @@ class DownstreamServer {
     this.idleTimer.unref();
   }
 
-  private teardown(reason: string): void {
+  // Returns the client-close promise so orderly shutdown (closeAll) can await
+  // session termination; event-driven callers fire-and-forget with `void`.
+  private teardown(reason: string): Promise<void> {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const client = this.client;
     this.client = undefined;
     this.ready = false;
     this.tools.clear();
-    if (client) {
-      client.onClose = undefined;
-      client.close();
-    }
     void reason;
+    if (!client) return Promise.resolve();
+    client.onClose = undefined;
+    return Promise.resolve(client.close()).catch(() => {});
   }
 }
 
@@ -244,7 +249,9 @@ export class McpPool {
     return server.call(tool, args, deadline);
   }
 
-  closeAll(): void {
-    for (const server of this.servers.values()) server.close();
+  /** Awaitable: HTTP downstreams terminate their server-side sessions on
+   *  orderly shutdown. Await before process.exit or sessions leak. */
+  async closeAll(): Promise<void> {
+    await Promise.all([...this.servers.values()].map((server) => server.close()));
   }
 }

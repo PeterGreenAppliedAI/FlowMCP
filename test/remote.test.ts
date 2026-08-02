@@ -15,24 +15,34 @@ function isError(res: { result?: Record<string, unknown> }) {
   return (res.result as { isError?: boolean }).isError;
 }
 
+async function startErp(token = 'test-token-123'): Promise<{ proc: ChildProcessWithoutNullStreams; url: string }> {
+  const proc = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/erp-http-mcp.ts'], {
+    cwd: projectRoot,
+    env: { ...process.env, ERP_PORT: '0', ERP_TOKEN: token },
+  });
+  const port = await new Promise<string>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('erp mock did not start')), 10_000);
+    proc.stdout.on('data', (c: Buffer) => {
+      const m = /ERP_LISTENING (\d+)/.exec(c.toString());
+      if (m) { clearTimeout(t); resolve(m[1]!); }
+    });
+  });
+  return { proc, url: `http://127.0.0.1:${port}` };
+}
+
+async function sessionCount(url: string): Promise<{ active: number; terminated: number }> {
+  return (await fetch(`${url}/session-count`).then((r) => r.json())) as { active: number; terminated: number };
+}
+
 describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
   let erp: ChildProcessWithoutNullStreams;
   let erpUrl = '';
   let client: RpcClient;
 
   beforeAll(async () => {
-    erp = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/erp-http-mcp.ts'], {
-      cwd: projectRoot,
-      env: { ...process.env, ERP_PORT: '0', ERP_TOKEN: 'test-token-123' },
-    });
-    const port = await new Promise<string>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('erp mock did not start')), 10_000);
-      erp.stdout.on('data', (c: Buffer) => {
-        const m = /ERP_LISTENING (\d+)/.exec(c.toString());
-        if (m) { clearTimeout(t); resolve(m[1]!); }
-      });
-    });
-    erpUrl = `http://127.0.0.1:${port}`;
+    const started = await startErp();
+    erp = started.proc;
+    erpUrl = started.url;
     client = new RpcClient(spawnServer(flowsDir, { ERP_URL: erpUrl, ERP_TOKEN: 'test-token-123' }));
     await client.request('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
     client.notify('notifications/initialized');
@@ -159,5 +169,91 @@ describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
     expect(isError(res)).toBe(true);
     expect(text(res)).toMatch(/401|unauthorized/i);
     bad.close();
+  });
+
+  // NOTE: the whole suite above is also the pagination regression — the ERP
+  // mock serves tools/list in two pages, and erp_report's attested tool
+  // (list_overdue_invoices) lives on page 2. A first-page-only client fails
+  // every test in this file at connect-time validation.
+
+  it('closes failed connection candidates: no leaked sessions after connect failures', async () => {
+    const { proc, url } = await startErp();
+    try {
+      const { McpPool, serversSchema } = await import('../src/mcp-pool.js');
+      const cfg = serversSchema.parse({
+        erp: { url, headers: { Authorization: 'Bearer test-token-123' }, attestReadOnly: ['no_such_tool'] },
+      });
+      const pool = new McpPool(cfg);
+      await expect(pool.call('erp', 'no_such_tool', {}, Date.now() + 15_000)).rejects.toThrow(/not present on the server/);
+      await pool.closeAll();
+      // every failed attempt initialized a session; every one must be closed
+      const s = await sessionCount(url);
+      expect(s.active).toBe(0);
+      expect(s.terminated).toBeGreaterThanOrEqual(3); // one per connect attempt
+    } finally {
+      proc.kill();
+    }
+  });
+
+  it('detects an expired session, resets the connection, and recovers on the next call', async () => {
+    const { proc, url } = await startErp();
+    try {
+      const { McpPool, serversSchema } = await import('../src/mcp-pool.js');
+      const cfg = serversSchema.parse({
+        erp: { url, headers: { Authorization: 'Bearer test-token-123' }, attestReadOnly: ['list_customers'] },
+      });
+      const pool = new McpPool(cfg);
+      const first = await pool.call('erp', 'list_customers', {}, Date.now() + 15_000);
+      expect(first.isError).toBeFalsy();
+      await fetch(`${url}/expire-sessions`, { method: 'POST' }); // server-side expiry
+      // the poisoned call fails LOUDLY (never silently replays a stale session,
+      // never blindly retries — it might have been a write) ...
+      await expect(pool.call('erp', 'list_customers', {}, Date.now() + 15_000))
+        .rejects.toThrow(/session expired|404/i);
+      // ... and the very next call reconnects with a fresh session and works
+      const recovered = await pool.call('erp', 'list_customers', {}, Date.now() + 15_000);
+      expect(recovered.isError).toBeFalsy();
+      expect((await sessionCount(url)).active).toBe(1); // exactly the fresh one
+      await pool.closeAll();
+    } finally {
+      proc.kill();
+    }
+  });
+
+  it('redacts reflected credentials from SDK error surfaces', async () => {
+    // reflect_500 echoes the Authorization header in its error body, the way
+    // misconfigured proxies do; the SDK puts response bodies into error
+    // messages. The adapter must scrub them before they reach model or logs.
+    // (reflect_500 also sits on tools/list page 2 — attesting it doubles as
+    // an explicit later-page validation check.)
+    const { McpPool, serversSchema } = await import('../src/mcp-pool.js');
+    const cfg = serversSchema.parse({
+      erp: { url: erpUrl, headers: { Authorization: 'Bearer test-token-123' }, attestReadOnly: ['reflect_500'] },
+    });
+    const pool = new McpPool(cfg);
+    const err = await pool.call('erp', 'reflect_500', {}, Date.now() + 15_000).catch((e: Error) => e.message);
+    await pool.closeAll();
+    expect(String(err)).toContain('internal error'); // the failure still surfaces
+    expect(String(err)).not.toContain('test-token-123');
+    expect(String(err)).toContain('[REDACTED]');
+  });
+
+  it('orderly shutdown terminates the server-side session', async () => {
+    const { proc, url } = await startErp();
+    try {
+      const { McpPool, serversSchema } = await import('../src/mcp-pool.js');
+      const cfg = serversSchema.parse({
+        erp: { url, headers: { Authorization: 'Bearer test-token-123' }, attestReadOnly: ['list_customers'] },
+      });
+      const pool = new McpPool(cfg);
+      await pool.call('erp', 'list_customers', {}, Date.now() + 15_000);
+      expect((await sessionCount(url)).active).toBe(1);
+      await pool.closeAll(); // awaitable: DELETE reaches the server before we move on
+      const s = await sessionCount(url);
+      expect(s.active).toBe(0);
+      expect(s.terminated).toBe(1);
+    } finally {
+      proc.kill();
+    }
   });
 });

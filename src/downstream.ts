@@ -18,7 +18,7 @@ import { interpolate } from './interpolate.js';
 // client negotiates its own (current) revision for HTTP downstreams.
 export const PROTOCOL_REVISIONS = ['2025-03-26', '2025-06-18', '2025-11-25'];
 const NEWEST_PROTOCOL = PROTOCOL_REVISIONS[PROTOCOL_REVISIONS.length - 1]!;
-const CLIENT_INFO = { name: 'flowmcp', version: '0.9.1' };
+const CLIENT_INFO = { name: 'flowmcp', version: '0.9.2' };
 
 const BASELINE_ENV_KEYS =
   process.platform === 'win32'
@@ -42,7 +42,9 @@ export interface DownstreamClient {
   connect(deadline: number): Promise<void>; // includes the initialize handshake
   listTools(deadline: number): Promise<DownstreamTool[]>;
   callTool(name: string, args: Record<string, unknown>, deadline: number): Promise<McpResult>;
-  close(): void;
+  /** May be async (HTTP: session termination). Callers that need orderly
+   *  shutdown must await it; fire-and-forget is fine for teardown paths. */
+  close(): void | Promise<void>;
   /** Fires once if the underlying connection dies unexpectedly. */
   onClose?: (reason: string) => void;
 }
@@ -95,8 +97,19 @@ export class StdioDownstreamClient implements DownstreamClient {
   }
 
   async listTools(deadline: number): Promise<DownstreamTool[]> {
-    const res = (await this.request('tools/list', {}, deadline)) as { tools: DownstreamTool[] };
-    return res.tools;
+    // Paginated: a first-page-only read makes later-page tools invisible and
+    // fails connect-time attestation validation for perfectly valid configs.
+    const all: DownstreamTool[] = [];
+    let cursor: string | undefined;
+    do {
+      const res = (await this.request('tools/list', cursor ? { cursor } : {}, deadline)) as {
+        tools: DownstreamTool[];
+        nextCursor?: string;
+      };
+      all.push(...res.tools);
+      cursor = res.nextCursor;
+    } while (cursor);
+    return all;
   }
 
   async callTool(name: string, args: Record<string, unknown>, deadline: number): Promise<McpResult> {
@@ -163,39 +176,109 @@ export class StdioDownstreamClient implements DownstreamClient {
 export class HttpDownstreamClient implements DownstreamClient {
   onClose?: (reason: string) => void;
   private client?: Client;
+  private transport?: StreamableHTTPClientTransport;
   private closed = false;
+  // Expanded credential material (interpolated header values, URL password /
+  // query values). SDK errors include downstream response bodies, and a
+  // misconfigured proxy or debug page can reflect the Authorization header —
+  // every error leaving this adapter is scrubbed against these.
+  private secrets: string[] = [];
 
   constructor(private readonly name: string, private readonly target: HttpTarget2) {}
+
+  private redact(message: string): string {
+    let out = message;
+    for (const s of this.secrets) out = out.split(s).join('[REDACTED]');
+    return out;
+  }
+
+  private redacted(e: unknown): Error {
+    return new Error(this.redact(e instanceof Error ? e.message : String(e)));
+  }
+
+  /** MCP Streamable HTTP signals an expired/unknown session as a 404. The
+   *  SDK does not reinitialize; a pooled client would keep replaying the
+   *  stale session forever. Tear down so the next call reconnects fresh —
+   *  the failed call itself is NOT retried (it may have been a write). */
+  private isSessionInvalid(e: unknown): boolean {
+    const msg = e instanceof Error ? e.message : String(e);
+    return /\b404\b/.test(msg) || /session/i.test(msg);
+  }
+
+  private invalidateSession(): void {
+    const notify = this.onClose;
+    this.onClose = undefined;
+    this.client = undefined;
+    this.transport = undefined;
+    notify?.('session expired');
+  }
 
   async connect(deadline: number): Promise<void> {
     const url = new URL(interpolate(this.target.url, { env: process.env }));
     const headers = Object.fromEntries(
       Object.entries(this.target.headers).map(([k, v]) => [k, interpolate(v, { env: process.env })]),
     );
+    this.secrets = [
+      ...Object.values(headers),
+      ...(url.password ? [url.password] : []),
+      ...[...url.searchParams.values()],
+    ].filter((s) => s.length >= 4);
     const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers } });
     transport.onclose = () => { if (!this.closed) this.onClose?.('connection closed'); };
     const client = new Client(CLIENT_INFO);
-    await client.connect(transport, { timeout: Math.max(1, deadline - Date.now()) });
+    try {
+      await client.connect(transport, { timeout: Math.max(1, deadline - Date.now()) });
+    } catch (e) {
+      await client.close().catch(() => {});
+      throw this.redacted(e);
+    }
     this.client = client;
+    this.transport = transport;
   }
 
   async listTools(deadline: number): Promise<DownstreamTool[]> {
     if (!this.client) throw new Error(`server '${this.name}' is not connected`);
-    const res = await this.client.listTools(undefined, { timeout: Math.max(1, deadline - Date.now()) });
-    // convert to our shape — SDK types stop here
-    return res.tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema as Record<string, unknown>,
-      annotations: t.annotations ? { readOnlyHint: t.annotations.readOnlyHint } : undefined,
-    }));
+    // Paginated: attested/allowed tools on later pages must be visible or
+    // connect-time validation rejects valid configs.
+    const all: DownstreamTool[] = [];
+    let cursor: string | undefined;
+    try {
+      do {
+        const res = await this.client.listTools(cursor ? { cursor } : undefined, {
+          timeout: Math.max(1, deadline - Date.now()),
+        });
+        // convert to our shape — SDK types stop here
+        all.push(...res.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema as Record<string, unknown>,
+          annotations: t.annotations ? { readOnlyHint: t.annotations.readOnlyHint } : undefined,
+        })));
+        cursor = res.nextCursor;
+      } while (cursor);
+    } catch (e) {
+      if (this.isSessionInvalid(e)) this.invalidateSession();
+      throw this.redacted(e);
+    }
+    return all;
   }
 
   async callTool(name: string, args: Record<string, unknown>, deadline: number): Promise<McpResult> {
     if (!this.client) throw new Error(`server '${this.name}' is not connected`);
-    const res = await this.client.callTool({ name, arguments: args }, undefined, {
-      timeout: Math.max(1, deadline - Date.now()),
-    });
+    let res;
+    try {
+      res = await this.client.callTool({ name, arguments: args }, undefined, {
+        timeout: Math.max(1, deadline - Date.now()),
+      });
+    } catch (e) {
+      if (this.isSessionInvalid(e)) {
+        this.invalidateSession();
+        throw new Error(
+          `server '${this.name}': session expired or invalidated (${this.redact(e instanceof Error ? e.message : String(e))}) — connection reset; retry the call`,
+        );
+      }
+      throw this.redacted(e);
+    }
     return {
       content: (res.content as McpResult['content']) ?? [],
       structuredContent: res.structuredContent,
@@ -203,10 +286,22 @@ export class HttpDownstreamClient implements DownstreamClient {
     };
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.closed = true;
-    void this.client?.close().catch(() => {});
+    const transport = this.transport;
+    const client = this.client;
+    this.transport = undefined;
     this.client = undefined;
+    if (transport) {
+      // Orderly shutdown terminates the server-side session (DELETE). A 405
+      // means the server doesn't support termination — that's compliant, not
+      // an error. Cap it so a dead server can't hang shutdown.
+      await Promise.race([
+        transport.terminateSession().catch(() => {}),
+        new Promise<void>((r) => setTimeout(r, 2_000).unref()),
+      ]);
+    }
+    await client?.close().catch(() => {});
   }
 }
 

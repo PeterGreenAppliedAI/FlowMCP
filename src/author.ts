@@ -93,7 +93,7 @@ export async function authorCli(): Promise<void> {
         }
         docs.push(doc);
       }
-      client.close();
+      await client.close();
     }
     return docs;
   }

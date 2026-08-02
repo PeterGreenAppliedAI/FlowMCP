@@ -101,7 +101,7 @@ export async function shadowCli(): Promise<void> {
     if (run.status !== 'complete') throw new Error('flow paused unexpectedly');
     flowOutput = run.text;
   } finally {
-    pool.closeAll();
+    await pool.closeAll();
   }
   console.error(`[shadow] flow produced ${flowOutput.length} chars; running host agent ...`);
 
