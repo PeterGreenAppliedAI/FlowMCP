@@ -1,6 +1,6 @@
 {
   "name": "@petergreenappliedai/flowmcp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Workflow-first MCP server: each tool is one deterministic workflow",
   "type": "module",
   "bin": {

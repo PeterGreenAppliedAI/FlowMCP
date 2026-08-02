@@ -79,6 +79,12 @@ prototype access. Available roots: `input`, `env` (declared vars only),
   **except a placeholder at position 0**, which is the base-URL slot
   (`{{env.API_BASE}}/path`). You cannot inject raw query fragments mid-URL;
   that is the point.
+- In `http_request` bodies and `mcp_call` args, a string that is **exactly
+  one placeholder** passes its value through with its type: numbers stay
+  numbers, booleans stay booleans, null stays null, and an absent optional
+  input leaves the key out of the serialized payload entirely — the correct
+  "don't send this field" semantics for structured APIs (GraphQL variables,
+  JSON bodies). Mixed strings interpolate to text as always.
 
 ## Execution semantics
 
@@ -272,6 +278,51 @@ Cadence guidance: schedule shadow runs slower than the flow's call frequency.
 This is affordable by construction — detection only nominates high-frequency
 procedures, so the flows worth compiling are exactly the flows whose audit
 cost amortizes.
+
+## The GraphQL query-log contract (`compile-graphql`) — v0.9
+
+The compiler's cleanest input: a GraphQL query log already separates contract
+(the query document), inputs (the variables object), and evidence (repeated
+executions). One JSON object per line; any gateway or host can emit it:
+
+```jsonc
+{"query":"query GetOrders($region: String!, $limit: Int = 10){ orders(region:$region, limit:$limit){ id total } }",
+ "variables":{"region":"EMEA","limit":10},"operationName":"GetOrders","success":true}
+```
+
+`success` means the operation completed **without GraphQL execution errors**
+— HTTP 200 with a top-level `errors` array is a failure. When `success` is
+absent, a non-empty `errors` field marks the run failed; otherwise it counts
+as ok. `operationName` is required when the document contains multiple
+operations.
+
+`flowmcp compile-graphql` clusters records by lexically-canonicalized query
+text (whitespace/comment-insensitive; string literals never mutated), applies
+the detection thresholds, and emits one candidate flow per qualifying
+operation: the query document as a constant, variables as typed flow inputs
+(types and nullability from the declarations in the query itself — `String!`
+→ required; `ID` maps to string; custom scalars need `--scalar Name=type`).
+
+Safety rules, learned the hard way elsewhere in this project:
+
+- **Observed invariance is not semantic constancy.** A variable that was
+  identical in every logged run (a tenant id, a region) is never folded into
+  the flow automatically — it becomes an input, flagged in provenance as a
+  candidate constant. Folding requires an explicit `--fold var=value`.
+- **Observed values are never executable defaults.** Default precedence:
+  GraphQL declaration default → explicit `--default var=value` → none.
+- **Provenance is redacted by default** — variables carry business data.
+  Counts, distinct counts, and value hashes ship; raw values require
+  `--include-observed-values`.
+- **Mutations are skipped by default** (compiling writes from logs crosses
+  the promotion boundary); `--include-mutations` emits them as candidates,
+  and the serving layer's write gate still applies.
+- Everything ambiguous refuses — subscriptions, list/input-object variables,
+  unmapped scalars, >3 inputs, credential-like variables, multi-operation
+  documents without `operationName`, same-shape queries differing only in
+  inline literals ("use GraphQL variables") — and the **refusal rate by
+  reason is a first-class output**, printed as a summary table so coverage
+  is honest rather than implied.
 
 ## Reserved for future versions
 

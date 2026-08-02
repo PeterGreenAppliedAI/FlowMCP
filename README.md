@@ -172,6 +172,7 @@ One entry point for the whole loop (from a clone: `npx tsx src/cli.ts <cmd>`, or
 | `flowmcp compile <run.v0.json> [outDir] [flowName] [serverName]` | compile a recorded trace into a candidate flow |
 | `flowmcp detect <executions.jsonl>` | nominate recurring procedures from execution logs |
 | `flowmcp shadow <flow> --agent '<cmd>' [--judge '<cmd>']` | shadow-verify a flow against a host-supplied agent |
+| `flowmcp compile-graphql <query-log.jsonl> --server <name> --tool <tool>` | compile recurring GraphQL operations into candidate flows |
 
 `author` needs an OpenAI-compatible endpoint via `--gateway` or the `GATEWAY` env var —
 there is no default endpoint or model; any local or hosted model works.

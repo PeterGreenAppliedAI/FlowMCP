@@ -26,6 +26,8 @@ const USAGE = `flowmcp — workflows are the tools
                                              nominate recurring procedures from execution logs
   flowmcp shadow   <flow> --flows <dir> --agent '<cmd>' [--judge '<cmd>']
                                              shadow-verify a flow against a host-supplied agent
+  flowmcp compile-graphql <query-log.jsonl> --server <name> --tool <toolname>
+                                             compile recurring GraphQL operations into candidate flows
 
 Flow directory: --flows, or FLOWMCP_FLOWS_DIR, or ./flows.
 Format spec: FORMAT.md · https://github.com/PeterGreenAppliedAI/FlowMCP
@@ -65,6 +67,10 @@ async function main(): Promise<void> {
     case 'shadow':
       process.argv.splice(2, 1);
       await (await import('./shadow.js')).shadowCli();
+      return;
+    case 'compile-graphql':
+      process.argv.splice(2, 1);
+      (await import('./compile-graphql.js')).compileGraphqlCli();
       return;
     default:
       if (sub !== undefined && !sub.startsWith('--')) {

@@ -25,9 +25,22 @@ export function interpolateUrl(template: string, ctx: ExprContext): string {
   });
 }
 
-// Interpolate string leaves of a JSON-ish value (for http_request bodies).
+// A string that is EXACTLY one placeholder passes its value through with its
+// type: numbers stay numbers, booleans stay booleans, null stays null, and an
+// absent optional value stays undefined — JSON serialization then omits the
+// key, which is the correct "don't send this variable" semantics for
+// structured args (GraphQL variables, API bodies). Mixed strings interpolate
+// to text as before.
+const SOLE_PLACEHOLDER = /^\{\{\s*([^{}]+?)\s*\}\}$/;
+
+// Interpolate string leaves of a JSON-ish value (http_request bodies,
+// mcp_call args).
 export function interpolateDeep(value: unknown, ctx: ExprContext): unknown {
-  if (typeof value === 'string') return interpolate(value, ctx);
+  if (typeof value === 'string') {
+    const sole = SOLE_PLACEHOLDER.exec(value);
+    if (sole) return evalExpr(sole[1]!, ctx);
+    return interpolate(value, ctx);
+  }
   if (Array.isArray(value)) return value.map((v) => interpolateDeep(v, ctx));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
