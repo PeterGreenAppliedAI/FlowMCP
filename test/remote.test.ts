@@ -15,10 +15,10 @@ function isError(res: { result?: Record<string, unknown> }) {
   return (res.result as { isError?: boolean }).isError;
 }
 
-async function startErp(token = 'test-token-123'): Promise<{ proc: ChildProcessWithoutNullStreams; url: string }> {
+async function startErp(token = 'test-token-123', extraEnv: Record<string, string> = {}): Promise<{ proc: ChildProcessWithoutNullStreams; url: string }> {
   const proc = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/erp-http-mcp.ts'], {
     cwd: projectRoot,
-    env: { ...process.env, ERP_PORT: '0', ERP_TOKEN: token },
+    env: { ...process.env, ERP_PORT: '0', ERP_TOKEN: token, ...extraEnv },
   });
   const port = await new Promise<string>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('erp mock did not start')), 10_000);
@@ -264,6 +264,27 @@ describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
       expect(s.active).toBe(1); // the ORIGINAL session — a reconnect would have made a second
       expect(s.deleteAttempts).toBe(0);
       await pool.closeAll();
+    } finally {
+      proc.kill();
+    }
+  });
+
+  it('initialization failure after a session id was issued still terminates it', async () => {
+    // The server allocates the session, then the handshake fails client-side
+    // (unsupported protocol version). The SDK closes the transport before
+    // rethrowing, so cleanup must run over an independent request path.
+    const { proc, url } = await startErp('test-token-123', { ERP_BAD_INIT: '1' });
+    try {
+      const { McpPool, serversSchema } = await import('../src/mcp-pool.js');
+      const cfg = serversSchema.parse({
+        erp: { url, headers: { Authorization: 'Bearer test-token-123' }, attestReadOnly: ['list_customers'] },
+      });
+      const pool = new McpPool(cfg);
+      await expect(pool.call('erp', 'list_customers', {}, Date.now() + 15_000)).rejects.toThrow();
+      await pool.closeAll();
+      const s = await sessionCount(url);
+      expect(s.active).toBe(0); // every issued session was cleaned up
+      expect(s.terminated).toBeGreaterThanOrEqual(3); // one DELETE per connect attempt, and they REACHED the server
     } finally {
       proc.kill();
     }

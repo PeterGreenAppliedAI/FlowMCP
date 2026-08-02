@@ -112,7 +112,11 @@ const server = createServer((req, res) => {
     if (msg.method === 'initialize') {
       const sid = `erp-session-${++sessionSeq}`;
       sessions.add(sid);
-      reply({ protocolVersion: msg.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'erp-mock', version: '1' } }, sid);
+      // ERP_BAD_INIT: issue a session id, then make initialization FAIL
+      // client-side (unsupported protocol version) — models a server that
+      // allocates the session before the handshake is validated
+      const version = process.env.ERP_BAD_INIT === '1' ? '1900-01-01' : (msg.params?.protocolVersion ?? '2025-03-26');
+      reply({ protocolVersion: version, capabilities: { tools: {} }, serverInfo: { name: 'erp-mock', version: '1' } }, sid);
       return;
     }
     // every non-initialize request needs a LIVE session — like production

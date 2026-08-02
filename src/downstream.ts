@@ -245,9 +245,21 @@ export class HttpDownstreamClient implements DownstreamClient {
     try {
       await client.connect(transport, { timeout: Math.max(1, deadline - Date.now()) });
     } catch (e) {
-      // initialize may have been issued a session id before the failure —
-      // terminate it, don't strand it server-side
-      await this.shutdown(transport, client);
+      // The SDK's Client.connect() closes the transport internally before
+      // rethrowing, so terminateSession() on it can no longer reach the
+      // server — but the transport DID capture any issued session id from
+      // the initialize response. Terminate the stranded session over an
+      // independent request path (best-effort, bounded; 405 = compliant
+      // non-termination).
+      const strandedSession = transport.sessionId;
+      await client.close().catch(() => {});
+      if (strandedSession) {
+        await fetch(url, {
+          method: 'DELETE',
+          headers: { ...headers, 'mcp-session-id': strandedSession },
+          signal: AbortSignal.timeout(2_000),
+        }).catch(() => {});
+      }
       throw this.redacted(e);
     }
     this.client = client;
