@@ -30,8 +30,8 @@ async function startErp(token = 'test-token-123'): Promise<{ proc: ChildProcessW
   return { proc, url: `http://127.0.0.1:${port}` };
 }
 
-async function sessionCount(url: string): Promise<{ active: number; terminated: number }> {
-  return (await fetch(`${url}/session-count`).then((r) => r.json())) as { active: number; terminated: number };
+async function sessionCount(url: string): Promise<{ active: number; terminated: number; deleteAttempts: number }> {
+  return (await fetch(`${url}/session-count`).then((r) => r.json())) as { active: number; terminated: number; deleteAttempts: number };
 }
 
 describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
@@ -206,10 +206,16 @@ describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
       const first = await pool.call('erp', 'list_customers', {}, Date.now() + 15_000);
       expect(first.isError).toBeFalsy();
       await fetch(`${url}/expire-sessions`, { method: 'POST' }); // server-side expiry
+      const attemptsBefore = (await sessionCount(url)).deleteAttempts;
       // the poisoned call fails LOUDLY (never silently replays a stale session,
       // never blindly retries — it might have been a write) ...
       await expect(pool.call('erp', 'list_customers', {}, Date.now() + 15_000))
         .rejects.toThrow(/session expired|404/i);
+      // ... invalidation CLOSED the discarded client (the wrapper's handles
+      // are the only ones — clearing them first would leak the SDK client;
+      // the DELETE attempt against the already-expired session proves the
+      // cleanup path actually ran) ...
+      expect((await sessionCount(url)).deleteAttempts).toBeGreaterThan(attemptsBefore);
       // ... and the very next call reconnects with a fresh session and works
       const recovered = await pool.call('erp', 'list_customers', {}, Date.now() + 15_000);
       expect(recovered.isError).toBeFalsy();
@@ -236,6 +242,31 @@ describe('remote HTTP downstream (ERP-shaped, unannotated)', () => {
     expect(String(err)).toContain('internal error'); // the failure still surfaces
     expect(String(err)).not.toContain('test-token-123');
     expect(String(err)).toContain('[REDACTED]');
+  });
+
+  it('ordinary tool 500s with session-y error text do NOT invalidate the connection', async () => {
+    // flaky_500's body deliberately says "customer 404 not found; reporting
+    // session unavailable" — a REST wrapper's error text must never be
+    // mistaken for MCP session expiry (detection is typed on transport status)
+    const { proc, url } = await startErp();
+    try {
+      const { McpPool, serversSchema } = await import('../src/mcp-pool.js');
+      const cfg = serversSchema.parse({
+        erp: { url, headers: { Authorization: 'Bearer test-token-123' }, attestReadOnly: ['flaky_500', 'list_customers'] },
+      });
+      const pool = new McpPool(cfg);
+      await pool.call('erp', 'list_customers', {}, Date.now() + 15_000);
+      await expect(pool.call('erp', 'flaky_500', {}, Date.now() + 15_000)).rejects.toThrow(/internal error/);
+      // same session still alive and reused — no teardown, no reconnect
+      const again = await pool.call('erp', 'list_customers', {}, Date.now() + 15_000);
+      expect(again.isError).toBeFalsy();
+      const s = await sessionCount(url);
+      expect(s.active).toBe(1); // the ORIGINAL session — a reconnect would have made a second
+      expect(s.deleteAttempts).toBe(0);
+      await pool.closeAll();
+    } finally {
+      proc.kill();
+    }
   });
 
   it('orderly shutdown terminates the server-side session', async () => {

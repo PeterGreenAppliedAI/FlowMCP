@@ -39,6 +39,19 @@ theater — the test asserted "token never echoed" while nothing in the
 test universe was *capable* of echoing it. Model the failure before
 claiming immunity to it.
 
+**Second round, same day:** the session-invalidation fix itself introduced a
+new P1 — it cleared the wrapper's client/transport references *before*
+notifying the pool, so the pool's cleanup found an already-emptied wrapper
+and the SDK resources leaked; invisible to the test because the server-side
+session was already expired. Fixed by closing first (idempotent close, shared
+bounded-shutdown helper), notifying second — and the fixture now counts
+DELETE *attempts* so cleanup-was-tried is observable even for dead sessions.
+The text-based session detection also got the treatment it deserved:
+`instanceof StreamableHTTPError && code === 404`, with flaky_500's body now
+deliberately saying "customer 404 … session unavailable" to prove error text
+can never kill a healthy connection. A fix that changes a lifecycle is a new
+lifecycle — it needs the same adversarial review as the code it replaced.
+
 ## 2026-08-02 — the first external consumer's integration bill: three portability fixes
 
 **What didn't work:** the first real host to mount FlowMCP (LocalClaw's MCP

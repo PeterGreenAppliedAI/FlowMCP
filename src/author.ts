@@ -75,25 +75,30 @@ export async function authorCli(): Promise<void> {
     const dl = () => Date.now() + 30_000;
     for (const [serverName, config] of Object.entries(configs)) {
       const client = createDownstreamClient(serverName, config.transport === 'http' ? config : { ...config, cwd: serversDir });
-      await client.connect(dl());
-      const listed = await client.listTools(dl());
-      for (const t of listed) {
-        if (t.annotations?.readOnlyHint !== true && !config.attestReadOnly.includes(t.name)) continue;
-        const doc: ToolDoc = {
-          name: t.name,
-          server: serverName,
-          description: t.description ?? '',
-          params: Object.keys((t.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}),
-        };
-        const probe = probes.find((p) => p.tool === t.name);
-        if (probe) {
-          const res = await client.callTool(t.name, probe.args, dl());
-          const text = (res.content ?? []).map((c) => c.text ?? '').join('');
-          doc.example = text.slice(0, 400);
+      // failure-path cleanup: a failed probe or paginated list must not
+      // strand the connection (HTTP sessions terminate in close())
+      try {
+        await client.connect(dl());
+        const listed = await client.listTools(dl());
+        for (const t of listed) {
+          if (t.annotations?.readOnlyHint !== true && !config.attestReadOnly.includes(t.name)) continue;
+          const doc: ToolDoc = {
+            name: t.name,
+            server: serverName,
+            description: t.description ?? '',
+            params: Object.keys((t.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}),
+          };
+          const probe = probes.find((p) => p.tool === t.name);
+          if (probe) {
+            const res = await client.callTool(t.name, probe.args, dl());
+            const text = (res.content ?? []).map((c) => c.text ?? '').join('');
+            doc.example = text.slice(0, 400);
+          }
+          docs.push(doc);
         }
-        docs.push(doc);
+      } finally {
+        await Promise.resolve(client.close()).catch(() => {});
       }
-      await client.close();
     }
     return docs;
   }

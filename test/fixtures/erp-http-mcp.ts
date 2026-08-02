@@ -46,6 +46,7 @@ const TOOLS_PAGE_SIZE = 4;
 let postedInvoices = 0;
 let sessionSeq = 0;
 let terminatedSessions = 0;
+let deleteAttempts = 0; // every DELETE, even for already-gone sessions — proves cleanup was ATTEMPTED
 const sessions = new Set<string>();
 
 function call(name: string, args: Record<string, unknown>): { text: string; isError?: boolean } {
@@ -81,7 +82,7 @@ const server = createServer((req, res) => {
   }
   if (req.url === '/session-count') {
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ active: sessions.size, terminated: terminatedSessions }));
+    res.end(JSON.stringify({ active: sessions.size, terminated: terminatedSessions, deleteAttempts }));
     return;
   }
   if (req.url === '/expire-sessions') { // server-side session expiry, forced
@@ -90,6 +91,7 @@ const server = createServer((req, res) => {
     return;
   }
   if (req.method === 'DELETE') { // MCP session termination
+    deleteAttempts++;
     const sid = String(req.headers['mcp-session-id'] ?? '');
     if (sessions.delete(sid)) { terminatedSessions++; res.statusCode = 200; res.end(); }
     else { res.statusCode = 404; res.end('session not found'); }
@@ -123,7 +125,14 @@ const server = createServer((req, res) => {
       const page = TOOLS.slice(start, start + TOOLS_PAGE_SIZE);
       reply({ tools: page, ...(start + TOOLS_PAGE_SIZE < TOOLS.length ? { nextCursor: 'page-2' } : {}) });
     } else if (msg.method === 'tools/call') {
-      if (msg.params?.name === 'flaky_500') { res.statusCode = 500; res.end('internal error'); return; }
+      if (msg.params?.name === 'flaky_500') {
+        // hostile body ON PURPOSE: mentions "404" and "session" like a REST
+        // wrapper would — session-invalidation detection must be typed on the
+        // transport status, never on error text
+        res.statusCode = 500;
+        res.end('internal error: customer 404 not found; reporting session unavailable');
+        return;
+      }
       if (msg.params?.name === 'reflect_500') {
         res.statusCode = 500;
         res.end(`internal error; request was: Authorization: ${req.headers.authorization ?? '(none)'}`);

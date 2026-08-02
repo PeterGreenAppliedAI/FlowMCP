@@ -11,7 +11,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { interpolate } from './interpolate.js';
 
 // Protocol revisions the hand-rolled sides of this codebase support. The SDK
@@ -196,21 +196,37 @@ export class HttpDownstreamClient implements DownstreamClient {
     return new Error(this.redact(e instanceof Error ? e.message : String(e)));
   }
 
-  /** MCP Streamable HTTP signals an expired/unknown session as a 404. The
-   *  SDK does not reinitialize; a pooled client would keep replaying the
-   *  stale session forever. Tear down so the next call reconnects fresh —
-   *  the failed call itself is NOT retried (it may have been a write). */
+  /** MCP Streamable HTTP signals an expired/unknown session as a TRANSPORT
+   *  404. The SDK does not reinitialize; a pooled client would keep
+   *  replaying the stale session forever. Detection is TYPED — a downstream
+   *  tool error whose text merely mentions "404" or "session" (a REST
+   *  wrapper saying "customer 404") must never destroy the connection. */
   private isSessionInvalid(e: unknown): boolean {
-    const msg = e instanceof Error ? e.message : String(e);
-    return /\b404\b/.test(msg) || /session/i.test(msg);
+    return e instanceof StreamableHTTPError && e.code === 404;
   }
 
-  private invalidateSession(): void {
+  /** Close our SDK resources FIRST (they are the only handles — the pool's
+   *  subsequent close() finds an already-emptied wrapper), then notify the
+   *  pool so the next call reconnects fresh. The failed call itself is NOT
+   *  retried — it may have been a write. */
+  private async invalidateSession(): Promise<void> {
     const notify = this.onClose;
     this.onClose = undefined;
-    this.client = undefined;
-    this.transport = undefined;
+    await this.close();
     notify?.('session expired');
+  }
+
+  /** Bounded, best-effort resource disposal shared by every path that ends a
+   *  connection: terminate the server-side session (405 = compliant
+   *  non-termination; a dead server can't hang us past 2s), then close. */
+  private async shutdown(transport?: StreamableHTTPClientTransport, client?: Client): Promise<void> {
+    if (transport) {
+      await Promise.race([
+        transport.terminateSession().catch(() => {}),
+        new Promise<void>((r) => setTimeout(r, 2_000).unref()),
+      ]);
+    }
+    await client?.close().catch(() => {});
   }
 
   async connect(deadline: number): Promise<void> {
@@ -229,7 +245,9 @@ export class HttpDownstreamClient implements DownstreamClient {
     try {
       await client.connect(transport, { timeout: Math.max(1, deadline - Date.now()) });
     } catch (e) {
-      await client.close().catch(() => {});
+      // initialize may have been issued a session id before the failure —
+      // terminate it, don't strand it server-side
+      await this.shutdown(transport, client);
       throw this.redacted(e);
     }
     this.client = client;
@@ -257,7 +275,7 @@ export class HttpDownstreamClient implements DownstreamClient {
         cursor = res.nextCursor;
       } while (cursor);
     } catch (e) {
-      if (this.isSessionInvalid(e)) this.invalidateSession();
+      if (this.isSessionInvalid(e)) await this.invalidateSession();
       throw this.redacted(e);
     }
     return all;
@@ -272,7 +290,7 @@ export class HttpDownstreamClient implements DownstreamClient {
       });
     } catch (e) {
       if (this.isSessionInvalid(e)) {
-        this.invalidateSession();
+        await this.invalidateSession();
         throw new Error(
           `server '${this.name}': session expired or invalidated (${this.redact(e instanceof Error ? e.message : String(e))}) — connection reset; retry the call`,
         );
@@ -286,22 +304,16 @@ export class HttpDownstreamClient implements DownstreamClient {
     };
   }
 
+  // Idempotent: captures and clears the handles, so a second close (e.g. the
+  // pool's teardown after a session invalidation already cleaned up) is a
+  // no-op rather than a double-terminate.
   async close(): Promise<void> {
     this.closed = true;
     const transport = this.transport;
     const client = this.client;
     this.transport = undefined;
     this.client = undefined;
-    if (transport) {
-      // Orderly shutdown terminates the server-side session (DELETE). A 405
-      // means the server doesn't support termination — that's compliant, not
-      // an error. Cap it so a dead server can't hang shutdown.
-      await Promise.race([
-        transport.terminateSession().catch(() => {}),
-        new Promise<void>((r) => setTimeout(r, 2_000).unref()),
-      ]);
-    }
-    await client?.close().catch(() => {});
+    await this.shutdown(transport, client);
   }
 }
 

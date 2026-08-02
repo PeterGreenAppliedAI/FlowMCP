@@ -88,6 +88,10 @@ async function buildTools(): Promise<Record<string, (args?: Record<string, unkno
 console.log = console.info = console.warn = ((...a: unknown[]) => process.stderr.write(a.map(String).join(' ') + '\n')) as typeof console.log;
 const emit = (s: string) => process.stdout.write(s + '\n');
 
+// close() can be async (HTTP session termination) — await it on BOTH exit
+// paths, or process.exit kills the DELETE in flight and strands sessions.
+const closeClients = () => Promise.all(clients.map((c) => Promise.resolve(c.close()).catch(() => {})));
+
 (async () => {
   const tools = await buildTools();
   const moduleStub = { exports: {} as Record<string, unknown> };
@@ -98,10 +102,10 @@ const emit = (s: string) => process.stdout.write(s + '\n');
   const result = await main(tools);
   if (mode === 'record') writeFileSync(cassettePath, JSON.stringify(cassette, null, 1));
   emit(JSON.stringify({ variant: mode === 'record' ? -1 : variantIdx, result: String(result), trace }, null, 1));
-  clients.forEach((c) => c.close());
+  await closeClients();
   process.exit(0);
-})().catch((e: unknown) => {
+})().catch(async (e: unknown) => {
   emit(JSON.stringify({ variant: variantIdx, error: e instanceof Error ? e.message : String(e), trace }, null, 1));
-  clients.forEach((c) => c.close());
+  await closeClients();
   process.exit(1);
 });
