@@ -27,7 +27,7 @@ import {
   type Registry,
 } from './registry.js';
 
-const VERSION = '0.9.2';
+const VERSION = '0.9.3';
 const APPROVAL_TTL_MS = 5 * 60_000;
 // Our surface (initialize / tools/list / tools/call / ping) is unchanged across
 // these revisions; echo the client's requested version when we know it.

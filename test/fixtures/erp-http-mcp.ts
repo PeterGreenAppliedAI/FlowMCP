@@ -92,6 +92,14 @@ const server = createServer((req, res) => {
   }
   if (req.method === 'DELETE') { // MCP session termination
     deleteAttempts++;
+    // spec-strict: post-initialization requests must carry the protocol
+    // version header — reject its absence so the requirement stays
+    // regression-tested, not just implemented
+    if (!req.headers['mcp-protocol-version']) {
+      res.statusCode = 400;
+      res.end('missing mcp-protocol-version header');
+      return;
+    }
     const sid = String(req.headers['mcp-session-id'] ?? '');
     if (sessions.delete(sid)) { terminatedSessions++; res.statusCode = 200; res.end(); }
     else { res.statusCode = 404; res.end('session not found'); }
