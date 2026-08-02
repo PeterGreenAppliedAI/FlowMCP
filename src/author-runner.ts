@@ -9,8 +9,8 @@
 //   replay: npx tsx author-runner.ts <script.js> replay <cassette.json> --variant 0|1
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { loadServers } from '../../src/loader.js';
-import { createDownstreamClient, type DownstreamClient } from '../../src/downstream.js';
+import { loadServers } from './loader.js';
+import { createDownstreamClient, type DownstreamClient } from './downstream.js';
 
 interface ToolInfo { name: string; description?: string; annotations?: { readOnlyHint?: boolean } }
 

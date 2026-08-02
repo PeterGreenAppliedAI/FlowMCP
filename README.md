@@ -148,10 +148,29 @@ surface. Full report with charts, per-model tables, and everything the data does
 prove: **[petergreenappliedai.github.io/FlowMCP](https://petergreenappliedai.github.io/FlowMCP/)** ·
 method, harness, raw results, and transcripts in [bench/](bench/).
 
+## The CLI
+
+One entry point for the whole loop (from a clone: `npx tsx src/cli.ts <cmd>`, or
+`npm run build` once and use `node dist/cli.js`; installed as a package it's the
+`flowmcp` bin):
+
+| command | what it does |
+|---|---|
+| `flowmcp serve [--flows <dir>]` | serve flows as MCP tools over stdio (default) |
+| `flowmcp validate [--flows <dir>]` | check flows + `servers.json5` + `registry.json5`, exit 0/1 |
+| `flowmcp status [--flows <dir>]` | registry health and advisory nominations |
+| `flowmcp explain [--flows <dir>]` | print a routing preamble for LLM hosts |
+| `flowmcp author --servers-dir <dir> --name <flow> --model <id> [--gateway <url>] "<intent>"` | author a flow with a model, under observation |
+| `flowmcp compile <run.v0.json> [outDir] [flowName] [serverName]` | compile a recorded trace into a candidate flow |
+| `flowmcp detect <executions.jsonl>` | nominate recurring procedures from execution logs |
+
+`author` needs an OpenAI-compatible endpoint via `--gateway` or the `GATEWAY` env var —
+there is no default endpoint or model; any local or hosted model works.
+
 ## The authoring loop (experimental)
 
 "Workflows as tools" has an obvious objection: someone has to author the workflows. The
-answer, built in [bench/compiler/](bench/compiler/): **a model helps author the
+answer, shipped as `flowmcp author` / `compile` / `detect`: **a model helps author the
 flow once, under observation and validation — it does not improvise the workflow at
 runtime.** A model writes a program against the tool surface; an instrumented runner
 records its execution (cassette record/replay for live, nondeterministic APIs); the
@@ -219,7 +238,7 @@ Flow files are **trusted programs** — treat them like code, review them like c
 
 ## Roadmap
 
-Done and shipped: the six-condition benchmark ([report](https://petergreenappliedai.github.io/FlowMCP/), frozen at tag `bench-2026-07-31`), the trace→flow compiler and `flowmcp author` loop ([bench/compiler/](bench/compiler/)), remote Streamable HTTP downstreams with operator attestation + schema drift pinning (v0.4), host-mediated write approval via elicitation (v0.5), and the flow registry with promotion states, run logging, and staleness nominations (v0.6).
+Done and shipped: the six-condition benchmark ([report](https://petergreenappliedai.github.io/FlowMCP/), frozen at tag `bench-2026-07-31`), the trace→flow compiler and authoring loop (now first-class CLI: `flowmcp author` / `compile` / `detect`; the benchmark corpus stays in [bench/](bench/)), remote Streamable HTTP downstreams with operator attestation + schema drift pinning (v0.4), host-mediated write approval via elicitation (v0.5), the flow registry with promotion states, run logging, and staleness nominations (v0.6), and the unified `flowmcp` CLI (v0.7).
 
 Ahead:
 

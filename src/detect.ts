@@ -3,7 +3,7 @@
 // success, and nominates procedures worth compiling — with input candidates
 // derived from cross-run argument variance (repetition IS the evidence).
 //
-//   npx tsx bench/compiler/detect.ts bench/compiler/executions.jsonl
+//   flowmcp detect <executions.jsonl>
 //     [--min-runs 3] [--min-success 0.8] [--min-tokens 2000]
 
 import { readFileSync } from 'node:fs';
@@ -30,6 +30,9 @@ function signature(calls: Call[]): string {
   return parts.join(' → ');
 }
 
+// CLI — exported for the `flowmcp detect` subcommand; the entry guard at the
+// bottom covers direct execution.
+export function detectCli(): void {
 const arg = (flag: string, dflt: number) => {
   const i = process.argv.indexOf(flag);
   return i !== -1 ? Number(process.argv[i + 1]) : dflt;
@@ -38,6 +41,10 @@ const MIN_RUNS = arg('--min-runs', 3);
 const MIN_SUCCESS = arg('--min-success', 0.8);
 const MIN_TOKENS = arg('--min-tokens', 2000);
 
+if (!process.argv[2]) {
+  console.error('usage: flowmcp detect <executions.jsonl> [--min-runs N] [--min-success R] [--min-tokens N]');
+  process.exit(1);
+}
 const executions: Execution[] = readFileSync(process.argv[2]!, 'utf8')
   .trim().split('\n').map((l) => JSON.parse(l) as Execution);
 
@@ -111,4 +118,9 @@ console.error(`\n${nominations.length} nomination(s) from ${executions.length} e
 for (const n of nominations) {
   console.error(`- [${n.runs} runs, ${Math.round(n.successRate * 100)}% ok, ~${n.avgTokens} tok/run, ${n.spendToDate} spent] ${n.signature}`);
   for (const [k, v] of Object.entries(n.inputCandidates)) console.error(`    input? ${k} — observed: ${JSON.stringify(v)}`);
+}
+}
+
+if (process.argv[1]?.endsWith('detect.ts') || process.argv[1]?.endsWith('detect.js')) {
+  detectCli();
 }
