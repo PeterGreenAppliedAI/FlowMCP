@@ -167,15 +167,16 @@ describe('MCP protocol over stdio', () => {
     expect(result.content[0].text).toContain('HTTP 500');
   });
 
-  it('returns isError for unknown parameters so the model can self-correct', async () => {
+  it('drops unknown parameters on read-only flows instead of failing the model', async () => {
+    // Small models pad arguments; a read-only flow runs anyway (with a stderr
+    // note) rather than erroring. Write flows stay strict — see params.test.ts.
     const res = await client.request('tools/call', {
       name: 'morning_brief',
       arguments: { town: 'Berlin' },
     });
     const result = res.result as { content: [{ text: string }]; isError?: boolean };
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("unknown parameter 'town'");
-    expect(result.content[0].text).toContain('city');
+    expect(result.isError).toBeFalsy();
+    expect(client.stderr).toContain("ignoring unknown parameter 'town'");
   });
 
   it('rejects unknown tools and unknown methods with JSON-RPC errors', async () => {

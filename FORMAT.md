@@ -85,7 +85,12 @@ prototype access. Available roots: `input`, `env` (declared vars only),
 Steps run strictly in order. Whole-flow timeout: 60s. A failed step aborts the
 flow; the MCP result is `isError: true` with text naming the flow, the step id,
 and the cause. Input validation (unknown parameter, missing required, type
-mismatch) fails the same way, before any step runs.
+mismatch) fails the same way, before any step runs — with one serving-layer
+exception: on a **read-only** flow, unknown parameters are dropped with a
+logged note instead of erroring, because small models pad arguments
+(`{"input": ""}` on a no-param flow is common) and failing the call punishes
+noise. Write flows stay strict: an unexpected argument on a write is a reason
+to stop, not to guess.
 
 ## The serving contract (MCP)
 
@@ -104,7 +109,10 @@ transport: **stdio** (`command`, `args?`, `env?`, `inheritEnv?`, `shell?`) or
 **Streamable HTTP** (`url`, `headers?` — connected via the official MCP SDK's reference client transport, pinned to its v1 line — both may interpolate `{{env.X}}`, so
 auth tokens live in the environment, never in files). Stdio children get a
 minimal baseline environment plus configured vars (`inheritEnv: true` is an
-explicit opt-in).
+explicit opt-in), and are spawned with **cwd = the directory containing
+`servers.json5`** — relative paths in `command`/`args` resolve against the
+config that names them, never against wherever the flowmcp process happened
+to be started (MCP servers are always spawned from somewhere else).
 
 Tool admission is fail-closed, three ways in: a tool is callable iff it
 declares `annotations.readOnlyHint: true`, OR the operator attests it as a

@@ -74,6 +74,11 @@ export interface PoolOptions {
   idleMs?: number;
   backoffMs?: number;
   spawnAttempts?: number;
+  /** Directory relative paths in stdio server configs resolve against —
+   *  the servers.json5 location, NOT the flowmcp process cwd. MCP servers
+   *  are always spawned from somewhere else; config-relative is the only
+   *  portable anchor. */
+  baseDir?: string;
 }
 
 class DownstreamServer {
@@ -128,7 +133,10 @@ class DownstreamServer {
     let lastError: unknown;
     for (let i = 0; i < attempts; i++) {
       try {
-        const client = createDownstreamClient(this.name, this.config);
+        const client = createDownstreamClient(
+          this.name,
+          this.config.transport === 'http' ? this.config : { ...this.config, cwd: this.opts.baseDir },
+        );
         client.onClose = () => this.teardown('connection lost');
         await client.connect(deadline);
         const tools = await client.listTools(deadline);

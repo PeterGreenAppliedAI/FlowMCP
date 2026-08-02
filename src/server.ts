@@ -164,6 +164,18 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
   const flow = state.flows.find((f) => f.name === name);
   if (!flow) throw new MethodError(-32602, `unknown tool '${String(name)}'`);
   const { confirm, ...args } = (params.arguments ?? {}) as Record<string, unknown>;
+  // Small models pad arguments (an empty {"input": ""} on a no-param flow is
+  // common). On READ-ONLY flows unknown parameters are dropped with a stderr
+  // note — rejecting them fails the model for noise. Write flows stay strict:
+  // an unexpected argument on a write is a reason to stop, not to guess.
+  if (state.effects.get(flow.name)?.readOnly) {
+    for (const key of Object.keys(args)) {
+      if (!(key in flow.input)) {
+        log(`ignoring unknown parameter '${key}' on read-only flow '${flow.name}'`);
+        delete args[key];
+      }
+    }
+  }
   const startedAt = Date.now();
   try {
     if (confirm !== undefined) {
@@ -325,7 +337,7 @@ async function main(): Promise<void> {
     }
     const effects = new Map(flows.map((f) => [f.name, flowEffects(f, servers)]));
     const writeGates = new Map(flows.map((f) => [f.name, topLevelWriteStepIds(f, servers)]));
-    state = { flows, pool: new McpPool(servers), effects, writeGates, approvals: new Map(), clientElicitation: false, registry, dir };
+    state = { flows, pool: new McpPool(servers, { baseDir: dir }), effects, writeGates, approvals: new Map(), clientElicitation: false, registry, dir };
     log(`loaded ${flows.length} flows from ${dir}: ${flows.map((f) => f.name).join(', ')}`);
     const serverNames = Object.keys(servers);
     if (serverNames.length) log(`downstream MCP servers: ${serverNames.join(', ')}`);

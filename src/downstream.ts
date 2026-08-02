@@ -51,6 +51,9 @@ export interface DownstreamClient {
 export interface StdioTarget {
   command: string; args: string[]; env: Record<string, string>;
   inheritEnv: boolean; shell: boolean;
+  /** Working directory for the child — anchor for relative paths in
+   *  command/args. Defaults to the parent's cwd when absent. */
+  cwd?: string;
 }
 export interface HttpTarget2 { url: string; headers: Record<string, string> }
 
@@ -70,7 +73,11 @@ export class StdioDownstreamClient implements DownstreamClient {
       ? { ...process.env }
       : Object.fromEntries(BASELINE_ENV_KEYS.map((k) => [k, process.env[k]]));
     for (const [k, v] of Object.entries(this.target.env)) env[k] = interpolate(v, { env: process.env });
-    const child = spawn(this.target.command, this.target.args, { env, shell: this.target.shell });
+    const child = spawn(this.target.command, this.target.args, {
+      env,
+      shell: this.target.shell,
+      cwd: this.target.cwd,
+    });
     this.child = child;
     child.stdin.on('error', () => {});
     child.on('error', (e) => this.die(`failed to start: ${e.message}`));
@@ -208,7 +215,7 @@ export class HttpDownstreamClient implements DownstreamClient {
 export function createDownstreamClient(
   name: string,
   config:
-    | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string>; inheritEnv: boolean; shell: boolean }
+    | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string>; inheritEnv: boolean; shell: boolean; cwd?: string }
     | { transport: 'http'; url: string; headers: Record<string, string> },
 ): DownstreamClient {
   return config.transport === 'http'

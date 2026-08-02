@@ -118,7 +118,7 @@ MCP — tokens interpolated from env):
 }
 ```
 
-(`shell` defaults to false. On Windows, `.cmd` shims like `npx` need `shell: true` — or point `command` directly at a Node entry point. `servers.json5` is operator-trusted config, so the shell opt-in is a portability knob, not an injection surface.)
+(`shell` defaults to false. On Windows, `.cmd` shims like `npx` need `shell: true` — or point `command` directly at a Node entry point. `servers.json5` is operator-trusted config, so the shell opt-in is a portability knob, not an injection surface. Relative paths in `command`/`args` resolve against the directory containing `servers.json5` — the config works no matter where the flowmcp process was started from.)
 
 Then use an `mcp_call` step like any other:
 

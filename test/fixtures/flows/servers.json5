@@ -1,20 +1,21 @@
-// Downstream MCP servers for composition tests. Paths are relative to the
-// flowmcp server's cwd (the project root in tests).
+// Downstream MCP servers for composition tests. Relative paths resolve
+// against THIS file's directory (children spawn with cwd = the flows dir),
+// so the config works no matter where the flowmcp process was started from.
 {
   mock: {
     command: 'node',
-    args: ['--import', 'tsx', 'test/fixtures/mock-mcp.ts'],
+    args: ['--import', 'tsx', '../mock-mcp.ts'],
     allow: ['write_thing'], // explicit consent for one non-read-only tool
   },
   // Same mock, but with full parent-environment inheritance opted in.
   mock_inherit: {
     command: 'node',
-    args: ['--import', 'tsx', 'test/fixtures/mock-mcp.ts'],
+    args: ['--import', 'tsx', '../mock-mcp.ts'],
     inheritEnv: true,
   },
   // Dogfood: a second flowmcp instance as the downstream server.
   self: {
     command: 'node',
-    args: ['--import', 'tsx', 'src/server.ts', '--flows', 'test/fixtures/dogfood-flows'],
+    args: ['--import', 'tsx', '../../../src/server.ts', '--flows', '../dogfood-flows'],
   },
 }

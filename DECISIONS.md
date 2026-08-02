@@ -2,6 +2,36 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-08-02 — the first external consumer's integration bill: three portability fixes
+
+**What didn't work:** the first real host to mount FlowMCP (LocalClaw's MCP
+bridge) needed three adaptations that should have been zero. (1) The compiler's
+default flow description was provenance text ("compiled candidate from a
+successful model-authored script") — the project whose thesis is *the
+description does the model's selection work* shipped descriptions that
+couldn't select; the host had to hand-rewrite one before its model could find
+the tool. (2) Relative paths in `servers.json5` resolved against the flowmcp
+process cwd, so the server only worked when spawned from its own repo — and
+MCP servers are always spawned from somewhere else. Our own test fixture
+documented the assumption in a comment instead of questioning it. (3) A
+padded argument (`{"input": ""}` on a no-param flow) was a hard error; small
+models pad arguments, and FlowMCP of all projects should have known that.
+
+**The fix:** (1) with no operator description the compiler now emits a loud
+`[REVIEW: replace...]` placeholder plus a provenance warning — provenance
+lives in provenance.json, never in the selection surface (`flowmcp author`
+already passed the intent through, so only the bare-compile path changed).
+(2) Stdio children spawn with cwd = the servers.json5 directory; config-
+relative is the only portable anchor. The fixture migration doubles as the
+regression test. (3) Read-only flows drop unknown parameters with a stderr
+note; write flows stay strict — an unexpected argument on a write is a reason
+to stop, not to guess.
+
+**The lesson:** a first consumer is an audit you can't run on yourself.
+Every "works here" assumption (cwd, description quality, argument hygiene)
+surfaced within one integration day. The standard now: the next consumer
+needs zero adaptations.
+
 ## 2026-08-01 — "warn and degrade" proved fragile live; unfoldables now refuse
 
 **What didn't work:** when the compiler couldn't fold a fanout into a `map` (e.g.
