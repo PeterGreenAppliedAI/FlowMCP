@@ -2,6 +2,49 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-08-01 — "warn and degrade" proved fragile live; unfoldables now refuse
+
+**What didn't work:** when the compiler couldn't fold a fanout into a `map` (e.g.
+a dedupe pass selected non-contiguous items), it degraded to unrolling the
+observed instance with a provenance warning. First live replay on different data
+broke it: the unrolled flow had fossilized a frozen `results[1]` reference from
+the trace, and a thinner result set made that index dangle. A warning on output
+that silently breaks on the next input is worse than no output.
+
+**The fix:** unfoldable structure is now a fail-closed REFUSAL naming the
+construct (non-contiguous selection, non-uniform blocks, derived args), same as
+the rest of the compiler's ambiguity policy. Warnings are reserved for
+degradations that stay correct on unseen data (e.g. ordinal numbering → list
+dashes). Regression: the model_watch corpus entry must refuse, not compile.
+
+## 2026-08-01 — elicitation responses would have deadlocked the serial queue
+
+**What didn't work:** the server processes client requests through a serial
+queue (one `tools/call` at a time, by design). v0.5's write gate has the server
+send its own request mid-flow (`elicitation/create`) and wait for the client's
+response — which arrives on the same stdin the queue reads. Routing it through
+the queue means the response can't be processed until the current `tools/call`
+finishes, and the current `tools/call` is awaiting the response: deadlock by
+construction.
+
+**The fix:** incoming lines are peek-parsed; responses to server-initiated
+requests (messages bearing an id we issued, no method) bypass the queue and
+resolve their pending elicitation directly. Requests still serialize. Regression
+tests drive a full elicitation round-trip inside a `tools/call`, including
+decline and malformed-response paths.
+
+## 2026-08-01 — importing the compiler ran its CLI
+
+**What didn't work:** `compile.ts` executed its command-line entry path at module
+top level, so any importer inherited it — `flowmcp author` imported the compiler
+and the CLI parsed *author's* argv, reading `--servers-dir` as an input file and
+failing on a flag it never defined.
+
+**The fix:** the CLI path is guarded by an entry-module check
+(`process.argv[1]?.endsWith('compile.ts')`); importing the module is now
+side-effect-free. Library-plus-CLI files need that guard the day they gain their
+first importer.
+
 ## 2026-08-01 — real APIs broke the compiler's variant differencing
 
 **What didn't work:** the compiler's evidence mechanism — run the same script

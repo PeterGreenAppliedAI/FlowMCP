@@ -137,10 +137,21 @@ Rules of engagement:
 - **The step timeout covers spawn + handshake + call** as one unit, bounded by the flow's 60s deadline — a slow cold-start can't invisibly eat the budget.
 - **Results are capped** at `maxResultChars` (default 8K) — downstream verbosity is not your flow's problem to inherit. `structuredContent` is preferred when the downstream tool provides it; otherwise JSON text results are parsed so later steps can path into them.
 
+## The benchmark
+
+The thesis is an empirical claim, so we tested it: six conditions, ten local models
+(4B–35B plus DeepSeek v4-flash), identical fixture data, outcome-based scoring. Headline:
+**79% task success through the two-flow façade vs 10% on the same 35 tools raw** — paired
+McNemar 33 discordant pairs, every one favoring the façade (exact p ≈ 2.3×10⁻¹⁰) — at a
+tenth of the tokens per attempt. A 7B through the façade outscored a 35B driving the raw
+surface. Full report with charts, per-model tables, and everything the data does *not*
+prove: **[petergreenappliedai.github.io/FlowMCP](https://petergreenappliedai.github.io/FlowMCP/)** ·
+method, harness, raw results, and transcripts in [bench/](bench/).
+
 ## The authoring loop (experimental)
 
 "Workflows as tools" has an obvious objection: someone has to author the workflows. The
-answer under development in [bench/compiler/](bench/compiler/): **a model helps author the
+answer, built in [bench/compiler/](bench/compiler/): **a model helps author the
 flow once, under observation and validation — it does not improvise the workflow at
 runtime.** A model writes a program against the tool surface; an instrumented runner
 records its execution (cassette record/replay for live, nondeterministic APIs); the
@@ -148,6 +159,14 @@ compiler derives a candidate flow from the *observed trace* — dataflow classif
 variant differencing, constants separated from inputs, redundant calls removed — and
 emits it with provenance, warnings, and fail-closed refusals for anything it cannot
 prove. Replay against mutated data catches hardcoding before a human ever reviews it.
+
+The full loop exists and has run end-to-end: `detect.ts` nominates flow candidates from
+execution logs (frequency × cost × success, inputs discovered from cross-run argument
+variance); `flowmcp author` takes an intent, introspects the configured servers'
+read-only tools, has a model write and repair a script in a disposable sandboxed process,
+records it against the real servers, and compiles the trace. Dogfooded on a real
+recurring news-gathering workflow: the compiled flow replaced a multi-minute agentic
+search sweep with one 4.5-second deterministic call at zero model tokens.
 
 This is not "automatic workflow generation": a generated flow carries provenance for
 every inference, warns where the DSL cannot express the source, and requires review
@@ -170,8 +189,13 @@ Flow files are **trusted programs** — treat them like code, review them like c
 
 ## Roadmap
 
+Done and shipped: the six-condition benchmark ([report](https://petergreenappliedai.github.io/FlowMCP/), frozen at tag `bench-2026-07-31`), the trace→flow compiler and `flowmcp author` loop ([bench/compiler/](bench/compiler/)), remote Streamable HTTP downstreams with operator attestation + schema drift pinning (v0.4), and host-mediated write approval via elicitation (v0.5).
+
+Ahead:
+
+- A flow registry and promotion loop: candidate → reviewed → active → retired, with source traces, post-deploy success tracking, and drift-triggered revalidation
+- A broader benchmark task suite: more decline and partial-match shapes, tasks with no flow coverage, more trials per cell
 - MCP conformance matrix (Inspector-based CI against current protocol revisions)
-- A benchmark: FlowMCP vs. a 30–40-tool primitive server across 7B/30B/frontier models — completion rate, argument accuracy, tokens, tool-call count
 - Destination allowlists and HTTPS policy for `http_request`
 - HTTP transport for the server itself
 - Flow hot-reload
