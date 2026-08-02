@@ -166,7 +166,10 @@ variance); `flowmcp author` takes an intent, introspects the configured servers'
 read-only tools, has a model write and repair a script in a disposable sandboxed process,
 records it against the real servers, and compiles the trace. Dogfooded on a real
 recurring news-gathering workflow: the compiled flow replaced a multi-minute agentic
-search sweep with one 4.5-second deterministic call at zero model tokens.
+search sweep with one 4.5-second deterministic call at zero model tokens. Nothing in the
+loop is provider-specific — the dogfood happens to use a self-hosted SearXNG wrapper, but
+any MCP server exposing a search (or any other read-only) tool slots into `servers.json5`
+the same way.
 
 This is not "automatic workflow generation": a generated flow carries provenance for
 every inference, warns where the DSL cannot express the source, and requires review

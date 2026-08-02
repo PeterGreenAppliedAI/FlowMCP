@@ -46,6 +46,23 @@ async function startClient(): Promise<RpcClient> {
   return client;
 }
 
+describe('stale path detection', () => {
+  it('warns at startup when a server config path does not exist relative to the config dir', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'flowmcp-stalepath-'));
+    dirs.push(dir);
+    await writeFile(join(dir, 'read.flow.json5'), READ_FLOW);
+    await writeFile(
+      join(dir, 'servers.json5'),
+      `{ ghost: { command: 'node', args: ['--import', 'tsx', 'bench/compiler/no-such-server.ts'] } }`,
+    );
+    const client = new RpcClient(spawnServer(dir, {}, ['--validate']));
+    const code = await new Promise<number | null>((resolve) => client['child'].on('exit', resolve));
+    expect(code).toBe(0); // a warning, not a startup failure
+    expect(client.stderr).toContain(`'bench/compiler/no-such-server.ts' does not exist relative to`);
+    expect(client.stderr).toContain('since v0.6');
+  });
+});
+
 describe('unknown-parameter policy', () => {
   it('read-only flows tolerate padded arguments with a stderr note', async () => {
     const client = await startClient();

@@ -114,6 +114,12 @@ explicit opt-in), and are spawned with **cwd = the directory containing
 config that names them, never against wherever the flowmcp process happened
 to be started (MCP servers are always spawned from somewhere else).
 
+**Migration note (v0.6):** configs written before v0.6 relied on process-cwd
+resolution; every relative path in an existing `servers.json5` must be
+re-anchored to the file's own directory. The runtime warns at startup when a
+path-like entry does not exist relative to that directory, instead of dying
+at first lazy connect.
+
 Tool admission is fail-closed, three ways in: a tool is callable iff it
 declares `annotations.readOnlyHint: true`, OR the operator attests it as a
 read in `attestReadOnly: [...]` (a security assertion for the many production

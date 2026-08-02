@@ -7,6 +7,8 @@
 // Streamable HTTP uses the reference SDK client — SDK types never reach here.
 
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
   createDownstreamClient,
@@ -213,6 +215,21 @@ export class McpPool {
 
   constructor(configs: Record<string, ServerConfig>, opts: PoolOptions = {}) {
     for (const [name, config] of Object.entries(configs)) {
+      // Fail fast on stale path assumptions: since v0.6 relative paths anchor
+      // to the servers.json5 directory, not the process cwd. A path-like
+      // entry that doesn't exist there is almost certainly a pre-v0.6 config
+      // — warn at startup instead of dying at first lazy connect.
+      if (opts.baseDir && config.transport === 'stdio') {
+        for (const p of [config.command, ...config.args]) {
+          if (!/[\\/]/.test(p) || p.startsWith('-') || p.includes('://') || p.includes('{{')) continue;
+          if (!existsSync(resolve(opts.baseDir, p))) {
+            process.stderr.write(
+              `flowmcp: [${name}] warning: '${p}' does not exist relative to ${opts.baseDir} — ` +
+                `relative paths resolve against the servers.json5 directory (since v0.6), not the process cwd\n`,
+            );
+          }
+        }
+      }
       this.servers.set(name, new DownstreamServer(name, config, opts));
     }
   }

@@ -61,7 +61,7 @@ async function buildTools(): Promise<Record<string, (args?: Record<string, unkno
   const configs = await loadServers(serversDir!);
   const dl = () => Date.now() + 30_000;
   for (const [serverName, config] of Object.entries(configs)) {
-    const client = createDownstreamClient(serverName, config);
+    const client = createDownstreamClient(serverName, config.transport === 'http' ? config : { ...config, cwd: serversDir! });
     clients.push(client);
     await client.connect(dl());
     const listed = await client.listTools(dl());

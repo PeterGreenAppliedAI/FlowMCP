@@ -32,6 +32,18 @@ Every "works here" assumption (cwd, description quality, argument hygiene)
 surfaced within one integration day. The standard now: the next consumer
 needs zero adaptations.
 
+**Postscript, same day:** the cwd fix itself broke the vendor's own dogfood
+config — `dogfood/flows/servers.json5` still carried a repo-root-relative
+path, and the consumer caught it within minutes of pulling. The fixture got
+migrated with the fix; the sweep for *other* configs written under the old
+assumption didn't happen (three were stale). Fixed all three, anchored the
+authoring pipeline's direct spawns to the same contract, and added a startup
+warning when a path-like config entry doesn't exist relative to the
+servers.json5 directory — a behavior change to path resolution deserves a
+loud migration signal, not an ENOENT at first lazy connect. Second lesson in
+one entry: when a fix changes an assumption, grep for every place the old
+assumption was written down.
+
 ## 2026-08-01 — "warn and degrade" proved fragile live; unfoldables now refuse
 
 **What didn't work:** when the compiler couldn't fold a fanout into a `map` (e.g.

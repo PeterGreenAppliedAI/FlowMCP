@@ -58,7 +58,7 @@ async function introspect(): Promise<ToolDoc[]> {
   const docs: ToolDoc[] = [];
   const dl = () => Date.now() + 30_000;
   for (const [serverName, config] of Object.entries(configs)) {
-    const client = createDownstreamClient(serverName, config);
+    const client = createDownstreamClient(serverName, config.transport === 'http' ? config : { ...config, cwd: serversDir });
     await client.connect(dl());
     const listed = await client.listTools(dl());
     for (const t of listed) {

@@ -2,7 +2,7 @@
 {
   prims: {
     command: 'node',
-    args: ['--import', 'tsx', 'bench/compiler/primitives-server.ts'],
+    args: ['--import', 'tsx', '../primitives-server.ts'],
     env: { VARIANT: '{{env.PRIMS_VARIANT}}' },
   },
 }
