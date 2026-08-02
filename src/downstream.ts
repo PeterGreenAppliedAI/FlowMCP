@@ -18,7 +18,7 @@ import { interpolate } from './interpolate.js';
 // client negotiates its own (current) revision for HTTP downstreams.
 export const PROTOCOL_REVISIONS = ['2025-03-26', '2025-06-18', '2025-11-25'];
 const NEWEST_PROTOCOL = PROTOCOL_REVISIONS[PROTOCOL_REVISIONS.length - 1]!;
-const CLIENT_INFO = { name: 'flowmcp', version: '0.5.0' };
+const CLIENT_INFO = { name: 'flowmcp', version: '0.6.0' };
 
 const BASELINE_ENV_KEYS =
   process.platform === 'win32'

@@ -175,6 +175,33 @@ engines execute workflows; FlowMCP is designed to **compile observed tool use in
 small, reviewable workflow tools, and then execute them deterministically**. Intelligence
 at build time, determinism at runtime.
 
+## The registry: promotion and rot detection (v0.6)
+
+A compiled flow is deterministic code, and deterministic code can silently rot. The
+registry is the maintenance layer: drop a `registry.json5` beside your flows and the
+directory becomes governed — every flow must be listed with a state
+(`candidate → reviewed → active → retired`), **only `active` flows are served**, and an
+unlisted flow file is a loud startup error. Entries carry provenance (source trace,
+authoring model) and review records. No registry file → nothing changes.
+
+With a registry present, every flow execution is logged to `registry-log.jsonl` — an
+open append-only contract that external systems write to as well: a consuming agent's
+editorial layer can append `signal` records ("this lens of the output was thin, I
+patched it"), and a shadow-replay harness can append `shadow` records (flow output vs
+the specialist path). `npm start -- --flows <dir> --status` computes per-flow health and
+prints advisory nominations, in cost order:
+
+- **Loud failure counting (free):** 3+ consecutive failed runs → needs review.
+- **Consumer signals (free):** the same lens patched in each of the last 3 gap-check
+  signals → recompile candidate — this catches *stale-but-well-formed* output, the rot
+  no structural check can see, using judgment the consumer was already paying for.
+- **Shadow replay (paid, scheduled):** a diverging replay → needs review. The harness is
+  future work; the log contract for it is specified now.
+
+Nominations are advisory: `--status` never mutates the registry. Promotion and
+retirement stay human decisions — the registry's job is to make them informed and cheap.
+Full spec in [FORMAT.md](FORMAT.md).
+
 ## Trust model
 
 Flow files are **trusted programs** — treat them like code, review them like code. The expression language can't execute code, but a flow can still send data to any URL it names; what bounds the blast radius is what the flow can *see*: only the env vars it declares in `env: [...]` (never all of `process.env`), only the 0–3 inputs it declares, and only downstream MCP tools that are read-only or explicitly allowlisted. `servers.json5` is operator configuration, same trust level as the server's own command line. Don't load flow files you haven't read.
@@ -189,11 +216,11 @@ Flow files are **trusted programs** — treat them like code, review them like c
 
 ## Roadmap
 
-Done and shipped: the six-condition benchmark ([report](https://petergreenappliedai.github.io/FlowMCP/), frozen at tag `bench-2026-07-31`), the trace→flow compiler and `flowmcp author` loop ([bench/compiler/](bench/compiler/)), remote Streamable HTTP downstreams with operator attestation + schema drift pinning (v0.4), and host-mediated write approval via elicitation (v0.5).
+Done and shipped: the six-condition benchmark ([report](https://petergreenappliedai.github.io/FlowMCP/), frozen at tag `bench-2026-07-31`), the trace→flow compiler and `flowmcp author` loop ([bench/compiler/](bench/compiler/)), remote Streamable HTTP downstreams with operator attestation + schema drift pinning (v0.4), host-mediated write approval via elicitation (v0.5), and the flow registry with promotion states, run logging, and staleness nominations (v0.6).
 
 Ahead:
 
-- A flow registry and promotion loop: candidate → reviewed → active → retired, with source traces, post-deploy success tracking, and drift-triggered revalidation
+- A shadow-replay harness: periodically re-run the specialist path against an active flow and file the diff as `shadow` records (the log contract already specifies them)
 - A broader benchmark task suite: more decline and partial-match shapes, tasks with no flow coverage, more trials per cell
 - MCP conformance matrix (Inspector-based CI against current protocol revisions)
 - Destination allowlists and HTTPS policy for `http_request`

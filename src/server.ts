@@ -17,8 +17,17 @@ import {
 import { executeFlow, resumeFlow, FlowError, type PendingFlow } from './engine.js';
 import { McpPool, PROTOCOL_REVISIONS } from './mcp-pool.js';
 import type { Flow } from './flow-schema.js';
+import {
+  appendLog,
+  checkRegistryCoverage,
+  computeHealth,
+  loadRegistry,
+  readLog,
+  REGISTRY_FILE,
+  type Registry,
+} from './registry.js';
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const APPROVAL_TTL_MS = 5 * 60_000;
 // Our surface (initialize / tools/list / tools/call / ping) is unchanged across
 // these revisions; echo the client's requested version when we know it.
@@ -38,6 +47,26 @@ interface ServerState {
   writeGates: Map<string, Set<string>>;
   approvals: Map<string, PendingApproval>;
   clientElicitation: boolean;
+  /** Present iff registry.json5 exists — turns on state enforcement + run logging. */
+  registry?: Registry;
+  dir: string;
+}
+
+// Best-effort run logging: a log write failure must never fail the tool call.
+async function recordRun(state: ServerState, flowName: string, ok: boolean, startedAt: number, error?: string): Promise<void> {
+  if (!state.registry) return;
+  try {
+    await appendLog(state.dir, {
+      ts: new Date().toISOString(),
+      flow: flowName,
+      kind: 'run',
+      ok,
+      ms: Date.now() - startedAt,
+      ...(error ? { error } : {}),
+    });
+  } catch (e) {
+    log(`registry log append failed: ${e instanceof Error ? e.message : e}`);
+  }
 }
 
 // Server-initiated requests (elicitation). Responses are routed OUTSIDE the
@@ -135,9 +164,12 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
   const flow = state.flows.find((f) => f.name === name);
   if (!flow) throw new MethodError(-32602, `unknown tool '${String(name)}'`);
   const { confirm, ...args } = (params.arguments ?? {}) as Record<string, unknown>;
+  const startedAt = Date.now();
   try {
     if (confirm !== undefined) {
-      return await confirmedCall(state, flow, String(confirm));
+      const res = await confirmedCall(state, flow, String(confirm));
+      if (!(res as { isError?: boolean }).isError) await recordRun(state, flow.name, true, startedAt);
+      return res;
     }
     // Structural ask-the-user: missing required parameters are elicited from
     // the client when it advertises the capability, instead of erroring.
@@ -164,6 +196,7 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
       writeGate: gate?.size ? gate : undefined,
     });
     if (run.status === 'complete') {
+      await recordRun(state, flow.name, true, startedAt);
       return { content: [{ type: 'text', text: run.text }] };
     }
     // Write pause. With elicitation, the host mediates the approval — the
@@ -182,6 +215,7 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
         return { content: [{ type: 'text', text: `Declined: '${flow.name}' was not approved. Nothing was written.` }] };
       }
       const resumed = await resumeFlow(flow, run.pending, { mcp: state.pool });
+      await recordRun(state, flow.name, true, startedAt);
       return { content: [{ type: 'text', text: resumed.status === 'complete' ? resumed.text : '' }] };
     }
     const token = randomUUID();
@@ -201,6 +235,7 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
         ? `Flow '${flow.name}' failed at step '${e.stepId}': ${e.message}`
         : `Flow '${flow.name}' failed: ${e instanceof Error ? e.message : e}`;
     log(detail);
+    await recordRun(state, flow.name, false, startedAt, detail);
     return { content: [{ type: 'text', text: detail }], isError: true };
   }
 }
@@ -274,12 +309,23 @@ async function main(): Promise<void> {
   const dir = flowsDir();
   let state: ServerState;
   try {
-    const flows = await loadFlows(dir);
+    let flows = await loadFlows(dir);
     const servers = await loadServers(dir);
     checkServerRefs(flows, new Set(Object.keys(servers)));
+    // A registry beside the flows opts the directory into promotion
+    // governance: every flow must be listed, only 'active' flows serve.
+    const registry = await loadRegistry(dir);
+    if (registry) {
+      checkRegistryCoverage(registry, flows.map((f) => f.name));
+      for (const f of flows) {
+        const s = registry[f.name]!.state;
+        if (s !== 'active') log(`registry: flow '${f.name}' is '${s}' — not serving it`);
+      }
+      flows = flows.filter((f) => registry[f.name]!.state === 'active');
+    }
     const effects = new Map(flows.map((f) => [f.name, flowEffects(f, servers)]));
     const writeGates = new Map(flows.map((f) => [f.name, topLevelWriteStepIds(f, servers)]));
-    state = { flows, pool: new McpPool(servers), effects, writeGates, approvals: new Map(), clientElicitation: false };
+    state = { flows, pool: new McpPool(servers), effects, writeGates, approvals: new Map(), clientElicitation: false, registry, dir };
     log(`loaded ${flows.length} flows from ${dir}: ${flows.map((f) => f.name).join(', ')}`);
     const serverNames = Object.keys(servers);
     if (serverNames.length) log(`downstream MCP servers: ${serverNames.join(', ')}`);
@@ -289,6 +335,38 @@ async function main(): Promise<void> {
   }
   if (process.argv.includes('--validate')) {
     log('flows valid');
+    process.exit(0);
+  }
+  if (process.argv.includes('--status')) {
+    if (!state.registry) {
+      console.log(`no ${REGISTRY_FILE} in ${dir} — registry disabled (all valid flows serve)`);
+      process.exit(0);
+    }
+    const { records, malformed } = await readLog(dir);
+    const names = Object.keys(state.registry).sort();
+    const rows = names.map((name) => {
+      const h = computeHealth(records, name);
+      const signals = Object.entries(h.signals).map(([s, n]) => `${s}:${n}`).join(' ') || '-';
+      return {
+        name,
+        state: state.registry![name]!.state,
+        runs: `${h.passed}/${h.runs}`,
+        consec: String(h.consecutiveFailures),
+        last: h.lastRun ?? '-',
+        signals,
+        nominations: h.nominations,
+      };
+    });
+    const w = (k: 'name' | 'state' | 'runs' | 'consec' | 'last' | 'signals') =>
+      Math.max(k.length, ...rows.map((r) => r[k].length));
+    const header = ['name', 'state', 'runs', 'consec', 'last', 'signals'] as const;
+    console.log(header.map((k) => k.padEnd(w(k))).join('  '));
+    for (const r of rows) console.log(header.map((k) => r[k].padEnd(w(k))).join('  '));
+    const nominated = rows.filter((r) => r.nominations.length);
+    console.log('');
+    if (nominated.length === 0) console.log('no nominations');
+    for (const r of nominated) for (const n of r.nominations) console.log(`NOMINATION ${r.name}: ${n}`);
+    if (malformed) console.log(`(${malformed} malformed log line(s) skipped)`);
     process.exit(0);
   }
   if (process.argv.includes('--explain')) {

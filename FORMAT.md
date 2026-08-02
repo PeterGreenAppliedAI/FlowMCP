@@ -1,4 +1,4 @@
-# The FlowMCP flow format — v0.5
+# The FlowMCP flow format — v0.6
 
 This document specifies `.flow.json5` as a **portable contract**, independent of
 the FlowMCP server that happens to execute it. The claim: a workflow worth
@@ -8,7 +8,7 @@ successful tool-use trace); any runtime that implements this spec can *serve*
 it; any model can *call* it. The format is the interface between those parties.
 
 Versioning: this spec is versioned with the FlowMCP release that implements it
-(currently **0.5**). Additions are backward-compatible within a major version;
+(currently **0.6**). Additions are backward-compatible within a major version;
 a flow file needs no version marker until a breaking change ships, at which
 point a top-level `format` field will be introduced.
 
@@ -167,7 +167,67 @@ them reduces this to the token protocol's guarantees. Without the capability,
 the v0.3 two-phase token protocol applies unchanged: a confirmation
 checkpoint, not a guaranteed human gate.
 
+## The registry (`registry.json5`) — v0.6
+
+Optional, beside the flow files. Its **presence** opts the directory into
+promotion governance; absent, every valid flow serves (pre-registry behavior).
+Like `servers.json5`, it is operator-trusted, hand-edited configuration — the
+runtime reads it and never writes it.
+
+Each key is a flow name mapping to:
+
+```json5
+{
+  weekly_gather: {
+    state: 'active',            // candidate | reviewed | active | retired
+    provenance: {               // optional — where this flow came from
+      source: 'traces/weekly_gather.trace.json',
+      authoredBy: 'deepseek-v4-flash',
+      compiledAt: '2026-08-01',
+      notes: 'compiled from the news-cron gathering phase',
+    },
+    review: { by: 'peter', at: '2026-08-02', notes: 'facet queries verified' },
+  },
+}
+```
+
+Enforcement is fail-closed both ways: only `active` flows are served (others
+are skipped with a stderr note); a flow file **not listed** in the registry is
+a startup error — a registry means the directory is governed, and an unlisted
+flow is an unreviewed flow; an entry naming a flow that doesn't exist is
+equally a startup error (a stale judgment). `--validate` checks all of this
+without serving.
+
+### The run log (`registry-log.jsonl`)
+
+When a registry is present, the runtime appends one JSON line per completed
+flow execution to `registry-log.jsonl` in the same directory. The file is an
+open contract: **external emitters append to it too**, and a status reader
+must skip (and count) malformed lines rather than fail. Record kinds:
+
+```jsonc
+// runtime-emitted: one flow execution (loud failures carry the step + cause)
+{"ts":"2026-08-02T03:10:00Z","flow":"weekly_gather","kind":"run","ok":true,"ms":4521}
+{"ts":"…","flow":"weekly_gather","kind":"run","ok":false,"ms":810,"error":"step 'sweep': …"}
+
+// consumer-emitted: an editorial staleness observation. `lenses` names the
+// thin parts of the output so persistence is detectable across runs.
+{"ts":"…","flow":"weekly_gather","kind":"signal","source":"gap_check","lenses":["china","edge"]}
+
+// harness-emitted: a shadow-replay comparison against the specialist path
+{"ts":"…","flow":"weekly_gather","kind":"shadow","ok":false,"note":"digest diverged on facet 2"}
+```
+
+`--status` computes per-flow health from the log and prints advisory
+**nominations** — it never mutates the registry: 3+ consecutive failed runs →
+needs review; the same lens present in each of the last 3 signals from one
+source → recompile candidate; a failed latest shadow record → needs review.
+The rationale: loud runtime failure and schema-drift refusal catch shape rot
+for free; consumer-side signals catch **stale-but-well-formed** output at zero
+marginal cost; shadow replay is the paid tier above both.
+
 ## Reserved for future versions
 
 - `format` field (introduced only on the first breaking change)
 - Flow-level effect declarations beyond the computed annotations
+- A shadow-replay harness emitting `shadow` records (the contract above)
