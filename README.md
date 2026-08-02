@@ -5,6 +5,14 @@ Most MCP servers wrap an entire platform: every endpoint becomes a tool, the mod
 ## Quickstart (60 seconds)
 
 ```sh
+npm install -g @petergreenappliedai/flowmcp
+flowmcp serve                    # serves the demo flows over stdio
+flowmcp serve --flows ~/my-flows # serves yours
+```
+
+Or from a clone (for development):
+
+```sh
 git clone https://github.com/PeterGreenAppliedAI/FlowMCP.git && cd FlowMCP
 npm install
 npm test          # hermetic — no network needed
@@ -18,7 +26,7 @@ Point any MCP client at it. Claude Desktop / Claude Code / anything MCP:
   "mcpServers": {
     "flowmcp": {
       "command": "npx",
-      "args": ["tsx", "/absolute/path/to/flowmcp/src/server.ts"]
+      "args": ["-y", "@petergreenappliedai/flowmcp", "serve", "--flows", "/absolute/path/to/your/flows"]
     }
   }
 }
