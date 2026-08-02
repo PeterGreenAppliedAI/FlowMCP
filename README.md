@@ -171,6 +171,7 @@ One entry point for the whole loop (from a clone: `npx tsx src/cli.ts <cmd>`, or
 | `flowmcp author --servers-dir <dir> --name <flow> --model <id> [--gateway <url>] "<intent>"` | author a flow with a model, under observation |
 | `flowmcp compile <run.v0.json> [outDir] [flowName] [serverName]` | compile a recorded trace into a candidate flow |
 | `flowmcp detect <executions.jsonl>` | nominate recurring procedures from execution logs |
+| `flowmcp shadow <flow> --agent '<cmd>' [--judge '<cmd>']` | shadow-verify a flow against a host-supplied agent |
 
 `author` needs an OpenAI-compatible endpoint via `--gateway` or the `GATEWAY` env var —
 there is no default endpoint or model; any local or hosted model works.
@@ -225,8 +226,11 @@ prints advisory nominations, in cost order:
 - **Consumer signals (free):** the same lens patched in each of the last 3 gap-check
   signals → recompile candidate — this catches *stale-but-well-formed* output, the rot
   no structural check can see, using judgment the consumer was already paying for.
-- **Shadow replay (paid, scheduled):** a diverging replay → needs review. The harness is
-  future work; the log contract for it is specified now.
+- **Shadow replay (paid, scheduled):** `flowmcp shadow <flow> --agent '<cmd>' --judge '<cmd>'`
+  re-derives the task through a host-supplied agent, has a host-supplied judge compare, and
+  records the verdict. FlowMCP never calls a model — the agent and judge are injected
+  commands; without a judge nothing is recorded. Write flows are refused (shadowing one
+  would write twice).
 
 Nominations are advisory: `--status` never mutates the registry. Promotion and
 retirement stay human decisions — the registry's job is to make them informed and cheap.
@@ -246,11 +250,10 @@ Flow files are **trusted programs** — treat them like code, review them like c
 
 ## Roadmap
 
-Done and shipped: the six-condition benchmark ([report](https://petergreenappliedai.github.io/FlowMCP/), frozen at tag `bench-2026-07-31`), the trace→flow compiler and authoring loop (now first-class CLI: `flowmcp author` / `compile` / `detect`; the benchmark corpus stays in [bench/](bench/)), remote Streamable HTTP downstreams with operator attestation + schema drift pinning (v0.4), host-mediated write approval via elicitation (v0.5), the flow registry with promotion states, run logging, and staleness nominations (v0.6), and the unified `flowmcp` CLI (v0.7).
+Done and shipped: the six-condition benchmark ([report](https://petergreenappliedai.github.io/FlowMCP/), frozen at tag `bench-2026-07-31`), the trace→flow compiler and authoring loop (now first-class CLI: `flowmcp author` / `compile` / `detect`; the benchmark corpus stays in [bench/](bench/)), remote Streamable HTTP downstreams with operator attestation + schema drift pinning (v0.4), host-mediated write approval via elicitation (v0.5), the flow registry with promotion states, run logging, and staleness nominations (v0.6), the unified `flowmcp` CLI (v0.7, [on npm](https://www.npmjs.com/package/@petergreenappliedai/flowmcp)), and the shadow-verification harness with host-injected agent and judge (v0.8).
 
 Ahead:
 
-- A shadow-replay harness: periodically re-run the specialist path against an active flow and file the diff as `shadow` records (the log contract already specifies them)
 - A broader benchmark task suite: more decline and partial-match shapes, tasks with no flow coverage, more trials per cell
 - MCP conformance matrix (Inspector-based CI against current protocol revisions)
 - Destination allowlists and HTTPS policy for `http_request`

@@ -24,6 +24,8 @@ const USAGE = `flowmcp — workflows are the tools
                                              compile a recorded trace into a candidate flow
   flowmcp detect   <executions.jsonl> [--min-runs N] [--min-success R] [--min-tokens N]
                                              nominate recurring procedures from execution logs
+  flowmcp shadow   <flow> --flows <dir> --agent '<cmd>' [--judge '<cmd>']
+                                             shadow-verify a flow against a host-supplied agent
 
 Flow directory: --flows, or FLOWMCP_FLOWS_DIR, or ./flows.
 Format spec: FORMAT.md · https://github.com/PeterGreenAppliedAI/FlowMCP
@@ -59,6 +61,10 @@ async function main(): Promise<void> {
     case 'detect':
       process.argv.splice(2, 1);
       (await import('./detect.js')).detectCli();
+      return;
+    case 'shadow':
+      process.argv.splice(2, 1);
+      await (await import('./shadow.js')).shadowCli();
       return;
     default:
       if (sub !== undefined && !sub.startsWith('--')) {

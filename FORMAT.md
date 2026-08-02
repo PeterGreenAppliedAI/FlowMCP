@@ -240,8 +240,40 @@ The rationale: loud runtime failure and schema-drift refusal catch shape rot
 for free; consumer-side signals catch **stale-but-well-formed** output at zero
 marginal cost; shadow replay is the paid tier above both.
 
+### Shadow verification (`flowmcp shadow`) — v0.8
+
+The harness that emits `shadow` records. The division of intelligence is
+strict: **FlowMCP orchestrates and records; the host supplies all judgment.**
+FlowMCP never calls a model — the agent and the judge are operator-injected
+commands, same pattern as elicitation (the runtime defines the protocol, the
+host mediates).
+
+```sh
+flowmcp shadow <flow> --flows <dir> --agent '<cmd>' [--judge '<cmd>'] \
+  [--task "<text>"] [--input k=v] [--timeout-ms N]
+```
+
+1. The flow runs deterministically. **Read-only flows only** — shadowing a
+   write flow would perform its writes a second time, so it is refused.
+2. The **agent command** receives `{task, inputs}` as JSON on stdin and
+   prints its own independent answer to stdout. The task text comes from
+   `--task`, else the flow's `provenance.json` intent (authored flows store
+   it), else the flow description. Independence matters: the agent re-derives
+   the answer through the host's reasoning path; it never sees the flow's
+   output.
+3. With `--judge`, the **judge command** receives
+   `{task, flowOutput, agentOutput}` on stdin and prints
+   `{"ok": bool, "note": "..."}`; the verdict is appended to
+   `registry-log.jsonl` as a `shadow` record (exit code 3 on divergence).
+   Without `--judge`, both outputs are printed for human comparison and
+   **nothing is recorded** — no judgment, no verdict, fail-closed.
+
+Cadence guidance: schedule shadow runs slower than the flow's call frequency.
+This is affordable by construction — detection only nominates high-frequency
+procedures, so the flows worth compiling are exactly the flows whose audit
+cost amortizes.
+
 ## Reserved for future versions
 
 - `format` field (introduced only on the first breaking change)
 - Flow-level effect declarations beyond the computed annotations
-- A shadow-replay harness emitting `shadow` records (the contract above)
