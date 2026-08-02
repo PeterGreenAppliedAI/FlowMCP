@@ -254,11 +254,20 @@ export class HttpDownstreamClient implements DownstreamClient {
       const strandedSession = transport.sessionId;
       await client.close().catch(() => {});
       if (strandedSession) {
-        await fetch(url, {
-          method: 'DELETE',
-          headers: { ...headers, 'mcp-session-id': strandedSession },
-          signal: AbortSignal.timeout(2_000),
-        }).catch(() => {});
+        try {
+          const response = await fetch(url, {
+            method: 'DELETE',
+            headers: {
+              ...headers,
+              'mcp-session-id': strandedSession,
+              // required on post-initialization requests (servers fall back
+              // to 2025-03-26 when absent, but say what we negotiated)
+              'mcp-protocol-version': transport.protocolVersion ?? NEWEST_PROTOCOL,
+            },
+            signal: AbortSignal.timeout(2_000),
+          });
+          await response.body?.cancel();
+        } catch { /* best-effort */ }
       }
       throw this.redacted(e);
     }
