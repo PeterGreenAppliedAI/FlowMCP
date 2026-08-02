@@ -173,6 +173,67 @@ describe('compileGraphqlLog', () => {
     expect(s.refused.map((r) => r.reason).sort()).toEqual(['missing-query', 'multi-op-no-name']);
   });
 
+  it('credential heuristic is word-boundary based: authorId compiles, authToken and api_key refuse', () => {
+    const mk = (varName: string) =>
+      [0, 1, 2].map((i) => ({
+        query: `query C($${varName}: String!) { thing(x: $${varName}) { id } }`,
+        variables: { [varName]: `v${i}` },
+        success: true,
+      }));
+    // innocent names that CONTAIN credential substrings must compile
+    for (const name of ['authorId', 'monkeyLimit', 'sessionless']) {
+      const s = compileGraphqlLog(mk(name), OPTS);
+      expect(s.emitted, name).toHaveLength(1);
+    }
+    // real credential shapes must refuse
+    for (const name of ['authToken', 'api_key', 'apiKey', 'clientSecret', 'AUTH']) {
+      const s = compileGraphqlLog(mk(name), OPTS);
+      expect(s.refused.map((r) => r.reason), name).toContain('credential-like-variable');
+    }
+  });
+
+  it('real-world syntax passes through inert: aliases, directives, inline fragments', () => {
+    const q = `query Mixed($flag: Boolean!, $region: String!) @cached {
+      top: orders(region: $region) @include(if: $flag) {
+        id
+        ... on PriorityOrder { rush }
+      }
+      plain { id }
+    }`;
+    const compact = 'query Mixed($flag: Boolean!, $region: String!) @cached { top: orders(region: $region) @include(if: $flag) { id ... on PriorityOrder { rush } } plain { id } }';
+    const records = [
+      { query: q, variables: { flag: true, region: 'A' }, success: true },
+      { query: q, variables: { flag: false, region: 'B' }, success: true },
+      { query: compact, variables: { flag: true, region: 'C' }, success: true },
+    ];
+    const s = compileGraphqlLog(records, OPTS);
+    expect(s.clusters).toBe(1); // formatting variants of the same query cluster together
+    expect(s.emitted).toHaveLength(1);
+    const e = s.emitted[0]!;
+    expect(e.flow).toContain('@ include ( if : $ flag'); // directive survives canonicalization verbatim
+    expect(e.flow).toContain('top : orders'); // alias survives
+    expect(e.flow).toContain('... on PriorityOrder'); // inline fragment survives
+    expect(e.flow).toContain(`flag: { type: 'boolean'`);
+    expect(e.flow).toContain(`region: { type: 'string'`);
+  });
+
+  it('directive-literal variants cluster separately and are NOT falsely merged as inline-literal variance', () => {
+    // Boundary, documented: literal masking covers strings and numbers only.
+    // Boolean/enum directive args are name tokens, so @include(if: true) and
+    // @include(if: false) are distinct operations — never merged, and never
+    // refused as inline-literal variance of each other.
+    const mk = (lit: string, region: string) => [0, 1, 2].map(() => ({
+      query: `query D($region: String!) { orders(region: $region) @include(if: ${lit}) { id } }`,
+      variables: { region },
+      success: true,
+    }));
+    const s = compileGraphqlLog([...mk('true', 'A'), ...mk('false', 'B')], OPTS);
+    expect(s.clusters).toBe(2);
+    expect(s.refused.filter((r) => r.reason === 'inline-literal-variance')).toHaveLength(0);
+    expect(s.emitted).toHaveLength(2); // distinct contracts, both compile
+    expect(new Set(s.emitted.map((e) => e.flowName)).size).toBe(2);
+  });
+
   it('whitespace and comment variants cluster together', () => {
     const spaced = 'query GetOrders($region: String!, $limit: Int = 10) {\n  # get them\n  orders(region: $region, limit: $limit) {\n    id\n    total\n  }\n}';
     const s = compileGraphqlLog([rec({ region: 'A' }), rec({ region: 'B' }), { query: spaced, variables: { region: 'C' }, success: true }], OPTS);

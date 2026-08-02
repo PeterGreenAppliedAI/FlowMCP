@@ -323,6 +323,16 @@ Safety rules, learned the hard way elsewhere in this project:
   inline literals ("use GraphQL variables") — and the **refusal rate by
   reason is a first-class output**, printed as a summary table so coverage
   is honest rather than implied.
+- The credential heuristic is **word-boundary** based, stated so it can be
+  judged: a variable refuses when a camelCase/snake_case word of its name is
+  one of token/secret/password/passwd/bearer/credential(s)/session/auth/apikey,
+  or an observed value looks like a JWT or an `sk_live`/`pk_test`-style key.
+  `authToken` and `api_key` refuse; `authorId` and `monkeyLimit` do not.
+- Directives (`@include(if: $flag)`), aliases, and inline fragments pass
+  through canonicalization verbatim into the emitted query constant. Literal
+  masking (for inline-variance detection) covers strings and numbers only —
+  boolean/enum directive arguments are name tokens, so `@include(if: true)`
+  and `@include(if: false)` are distinct operations, never merged.
 
 ## Reserved for future versions
 

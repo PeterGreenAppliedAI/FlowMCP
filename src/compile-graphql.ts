@@ -246,7 +246,19 @@ export interface CompileSummary {
 const BUILTIN_SCALARS: Record<string, 'string' | 'number' | 'boolean'> = {
   String: 'string', ID: 'string', Int: 'number', Float: 'number', Boolean: 'boolean',
 };
-const CREDENTIAL_NAME = /(token|secret|password|passwd|api[-_]?key|auth|bearer|credential|session)/i;
+// Credential detection is WORD-boundary based, not substring: 'authToken'
+// and 'api_key' refuse; 'authorId' (contains "auth") and 'monkeyLimit'
+// (contains "key") do not. A substring match would over-refuse innocent
+// variables and a match-anything would under-refuse — both erode trust in
+// the refusal table. Value side: JWT and sk_live/pk_test shapes.
+const CREDENTIAL_WORDS = new Set([
+  'token', 'secret', 'password', 'passwd', 'bearer', 'credential', 'credentials', 'session', 'auth', 'apikey',
+]);
+function isCredentialName(name: string): boolean {
+  const words = (name.match(/[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+/g) ?? []).map((w) => w.toLowerCase());
+  if (words.some((w) => CREDENTIAL_WORDS.has(w))) return true;
+  return name.toLowerCase().replace(/[_-]/g, '').includes('apikey');
+}
 const CREDENTIAL_VALUE = /^(eyJ[A-Za-z0-9_-]{10,}|(sk|pk)[-_](live|test)[-_A-Za-z0-9]+)/;
 const hash8 = (v: unknown) => createHash('sha256').update(JSON.stringify(v) ?? 'undefined').digest('hex').slice(0, 8);
 
@@ -366,7 +378,7 @@ export function compileGraphqlLog(records: QueryLogRecord[], opts: GraphqlCompil
         refusedThis = true;
         break;
       }
-      if (CREDENTIAL_NAME.test(def.name) || observed.some((v) => typeof v === 'string' && CREDENTIAL_VALUE.test(v))) {
+      if (isCredentialName(def.name) || observed.some((v) => typeof v === 'string' && CREDENTIAL_VALUE.test(v))) {
         recordRefusal('credential-like-variable', label, runs, `$${def.name} — credentials belong in server config ({{env.X}} headers), never in flow traffic`);
         refusedThis = true;
         break;
