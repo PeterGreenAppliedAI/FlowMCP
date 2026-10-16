@@ -245,7 +245,9 @@ describe('compileGraphqlLog', () => {
 describe('end to end: compiled flow through the real server', () => {
   const dirs: string[] = [];
   afterEach(async () => {
-    while (dirs.length) await rm(dirs.pop()!, { recursive: true, force: true });
+    // Windows: a downstream child can outlive the killed server by a moment
+    // with its cwd inside the dir (EBUSY) — retry instead of failing cleanup.
+    while (dirs.length) await rm(dirs.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   });
 
   it('serves an emitted flow; Int variables arrive as numbers; folded constants are sent', async () => {
