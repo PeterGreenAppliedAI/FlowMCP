@@ -30,7 +30,7 @@ describe('GraphQL adapter', () => {
     const c = adapter();
     await c.connect(soon());
     const by = Object.fromEntries((await c.listTools()).map((t) => [t.name, t]));
-    expect(Object.keys(by).sort()).toEqual(['createCustomer', 'customer', 'customers', 'deleteCustomer', 'version']);
+    expect(Object.keys(by).sort()).toEqual(['createCustomer', 'customer', 'customers', 'deleteCustomer', 'resetAll', 'version']);
     expect(by.customer!.annotations?.readOnlyHint).toBe(true);
     expect(by.createCustomer!.annotations).toBeUndefined();
     expect(by.customer!.inputSchema).toMatchObject({ required: ['id'], properties: { id: { type: 'string' }, select: { type: 'string' } } });
@@ -74,6 +74,41 @@ describe('GraphQL adapter', () => {
       expect(res.isError, select).toBe(true);
     }
     expect(api.documents.length).toBe(before);
+  });
+
+  it('cannot smuggle a second root field through select (review 2026-10-16, P1)', async () => {
+    const c = adapter();
+    await c.connect(soon());
+    const before = api.mutations();
+    const docs = api.documents.length;
+    for (const select of ['{ id } resetAll', 'id } resetAll {', '{ id } { name }', '{ id }}', '{ { id } }', '']) {
+      const res = await c.callTool('createCustomer', { input: { name: 'X' }, select }, soon());
+      if (select === '') continue; // empty = default selection, sent normally
+      expect(res.isError, select).toBe(true);
+    }
+    // only the '' call reached the server, as a single-root document
+    expect(api.documents.length).toBe(docs + 1);
+    expect(api.documents.at(-1)!.query).toBe('mutation FlowMcp($input: NewCustomer!) { createCustomer(input: $input) { id name status address { city } } }');
+    expect(api.mutations()).toBe(before + 1);
+  });
+
+  it('validates select against the schema', async () => {
+    const c = adapter();
+    await c.connect(soon());
+    const cases: Array<[string, RegExp]> = [
+      ['nope', /'nope' is not a field of Customer/],
+      ['orders { id }', /'orders' requires arguments/],
+      ['address', /'address' is an object/],
+      ['name { x }', /'name' is a scalar and has no fields/],
+      ['address { zip }', /'address.zip' is not a field of Address/],
+    ];
+    for (const [select, err] of cases) {
+      const res = await c.callTool('customer', { id: 'c1', select }, soon());
+      expect(res.content![0]!.text, select).toMatch(err);
+    }
+    const ok = await c.callTool('customer', { id: 'c1', select: '{ __typename, name, address { country { code } } }' }, soon());
+    expect(ok.isError).toBeUndefined();
+    expect(api.documents.at(-1)!.query).toContain('customer(id: $id) { __typename name address { country { code } } }');
   });
 
   it('treats GraphQL errors as failures and redacts reflected credentials', async () => {

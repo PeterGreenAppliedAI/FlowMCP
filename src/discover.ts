@@ -18,7 +18,7 @@
 import { resolve } from 'node:path';
 import { createDownstreamClient, type DownstreamTool } from './downstream.js';
 import { interpolate } from './interpolate.js';
-import { parseSpecText } from './openapi.js';
+import { fetchWithCredentialScope, parseSpecText } from './openapi.js';
 
 export type Transport = 'mcp' | 'stdio' | 'openapi' | 'graphql';
 
@@ -75,7 +75,9 @@ export async function discover(target: string, opts: DiscoverOptions = {}): Prom
     for (const b of bases) for (const p of SPEC_PATHS) candidates.push(new URL(p, b).href);
     for (const c of [...new Set(candidates)]) {
       probes.push(`GET ${c}`);
-      const spec = await fetchSpec(c, url.origin === new URL(c).origin ? live : {}, timeoutMs);
+      // credentials only ever reach the origin the operator pointed us at —
+      // on the probe itself AND on every redirect hop
+      const spec = await fetchSpec(c, live, url.origin, timeoutMs);
       if (!spec) continue;
       const entry: Record<string, unknown> = { openapi: c, ...(Object.keys(headers).length ? { headers } : {}) };
       // A spec with no servers[] (or a relative one) still needs an API base;
@@ -120,9 +122,9 @@ export async function discover(target: string, opts: DiscoverOptions = {}): Prom
   throw new Error(`no MCP server, OpenAPI/Swagger spec, or GraphQL endpoint found at ${target}\n  tried:\n    ${probes.join('\n    ')}`);
 }
 
-async function fetchSpec(url: string, headers: Record<string, string>, timeoutMs: number): Promise<Record<string, unknown> | undefined> {
+async function fetchSpec(url: string, headers: Record<string, string>, origin: string, timeoutMs: number): Promise<Record<string, unknown> | undefined> {
   try {
-    const res = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetchWithCredentialScope(url, headers, origin, Date.now() + timeoutMs);
     if (!res.ok) return undefined;
     const spec = parseSpecText(await res.text());
     return typeof spec.openapi === 'string' || typeof spec.swagger === 'string' ? spec : undefined;

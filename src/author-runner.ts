@@ -1,6 +1,9 @@
-// Generalized sandbox runner for `author`: executes an untrusted generated
-// script in this disposable child process, with a tools bridge backed by REAL
-// downstream MCP servers (record mode) or by a cassette (replay mode).
+// Broker for `author`: owns the tools bridge, backed by REAL downstream MCP
+// servers (record mode) or by a cassette (replay mode), and runs the
+// untrusted generated script through runSandboxed (src/sandbox.ts) — a
+// separate, permission-restricted, empty-environment child in which the
+// script holds only tool NAMES. This process (connections, credentials) is
+// never where model-generated code executes.
 // Discovery is read-only by construction: only tools advertising
 // annotations.readOnlyHint are callable — allowlisted write tools are NOT
 // callable during authoring.
@@ -11,6 +14,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { loadServers } from './loader.js';
 import { createDownstreamClient, type DownstreamClient } from './downstream.js';
+import { runSandboxed } from './sandbox.js';
 
 interface ToolInfo { name: string; description?: string; annotations?: { readOnlyHint?: boolean } }
 
@@ -94,12 +98,10 @@ const closeClients = () => Promise.all(clients.map((c) => Promise.resolve(c.clos
 
 (async () => {
   const tools = await buildTools();
-  const moduleStub = { exports: {} as Record<string, unknown> };
-  const factory = new Function('module', 'exports', 'tools',
-    `${code}\n;return typeof main === 'function' ? main : (typeof module.exports === 'function' ? module.exports : null);`);
-  const main = factory(moduleStub, moduleStub.exports, tools) as null | ((t: typeof tools) => Promise<unknown>);
-  if (!main) throw new Error('script did not define async function main(tools)');
-  const result = await main(tools);
+  const result = await runSandboxed(code, Object.keys(tools), (name, args) => tools[name]!(args), {
+    timeoutMs: 55_000,
+    onLog: (line) => process.stderr.write(`[script] ${line}\n`),
+  });
   if (mode === 'record') writeFileSync(cassettePath, JSON.stringify(cassette, null, 1));
   emit(JSON.stringify({ variant: mode === 'record' ? -1 : variantIdx, result: String(result), trace }, null, 1));
   await closeClients();

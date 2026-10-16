@@ -123,6 +123,35 @@ describe('discover', () => {
     expect(parseDraft('mock', renderDraft('mock', d))).toMatchObject({ transport: 'stdio', command: process.execPath });
   });
 
+  it('never forwards probe credentials across a redirect to another origin', async () => {
+    // every request the foreign origin receives — discover fetches the spec
+    // more than once, and a leak on ANY of them is a leak
+    const received: Array<string | undefined> = [];
+    const other = createServer((req, res) => {
+      received.push(req.headers['x-api-key'] as string | undefined);
+      res.setHeader('content-type', 'application/json');
+      res.end(petsSpec);
+    });
+    const otherUrl = (await listen(other)).replace('127.0.0.1', 'localhost');
+    const home = createServer((req, res) => {
+      if (req.url === '/openapi.json') { res.statusCode = 302; res.setHeader('location', `${otherUrl}/spec.json`); return res.end(); }
+      res.statusCode = 404;
+      res.end();
+    });
+    const homeUrl = await listen(home);
+    process.env.DISCOVER_REDIRECT_KEY = 'redirect-key-123456';
+    try {
+      const d = await discover(homeUrl, { headers: { 'X-Api-Key': '{{env.DISCOVER_REDIRECT_KEY}}' }, type: 'openapi' });
+      expect(d.transport).toBe('openapi');
+      expect(received.length).toBeGreaterThan(0);
+      expect(received.every((k) => k === undefined), JSON.stringify(received)).toBe(true);
+    } finally {
+      delete process.env.DISCOVER_REDIRECT_KEY;
+      await close(other);
+      await close(home);
+    }
+  });
+
   it('reports every probe when nothing is found', async () => {
     const server = createServer((_req, res) => { res.statusCode = 404; res.end(); });
     const url = await listen(server);

@@ -49,6 +49,50 @@ export const INTROSPECTION_QUERY = `query FlowMcpIntrospection {
 const SELECTION_DEPTH = 2;
 const MAX_SELECTION_FIELDS = 60;
 const SELECT_ALLOWED = /^[A-Za-z0-9_\s{},]*$/;
+const MAX_SELECT_DEPTH = 6;
+
+interface SelNode { name: string; children?: SelNode[] }
+
+// Parse a caller-supplied selection into a tree: EXACTLY one selection set
+// (outer braces optional), fields with optional nested sets, nothing else.
+// The query text is then PRINTED from the tree — the caller's characters
+// never reach the document, so a trailing sibling (`{ id } otherMutation`)
+// cannot become a second root field.
+export function parseSelection(src: string): SelNode[] | { error: string } {
+  if (!SELECT_ALLOWED.test(src)) return { error: 'only field names, braces and commas are allowed' };
+  const tokens = src.match(/[A-Za-z_][A-Za-z0-9_]*|[{}]|\S/g) ?? [];
+  if (tokens.some((t) => !/^[A-Za-z_][A-Za-z0-9_]*$|^[{}]$/.test(t) && t !== ',')) return { error: 'unexpected token' };
+  const toks = tokens.filter((t) => t !== ',');
+  let i = 0;
+  const set = (depth: number): SelNode[] | { error: string } => {
+    if (depth > MAX_SELECT_DEPTH) return { error: `nested deeper than ${MAX_SELECT_DEPTH}` };
+    if (toks[i] !== '{') return { error: "expected '{'" };
+    i++;
+    const nodes: SelNode[] = [];
+    while (i < toks.length && toks[i] !== '}') {
+      const name = toks[i]!;
+      if (name === '{') return { error: "a selection set must follow a field name" };
+      i++;
+      const node: SelNode = { name };
+      if (toks[i] === '{') {
+        const children = set(depth + 1);
+        if (!Array.isArray(children)) return children;
+        node.children = children;
+      }
+      nodes.push(node);
+    }
+    if (toks[i] !== '}') return { error: "unbalanced braces: missing '}'" };
+    i++;
+    if (!nodes.length) return { error: 'empty selection set' };
+    return nodes;
+  };
+  const wrapped = toks[0] === '{' ? toks : ['{', ...toks, '}'];
+  toks.splice(0, toks.length, ...wrapped);
+  const root = set(1);
+  if (!Array.isArray(root)) return root;
+  if (i !== toks.length) return { error: 'exactly one selection set is allowed — found content after it' };
+  return root;
+}
 
 export class GraphqlDownstreamClient implements DownstreamClient {
   onClose?: (reason: string) => void;
@@ -188,6 +232,48 @@ export class GraphqlDownstreamClient implements DownstreamClient {
     return {}; // custom scalar or depth-capped input: any JSON
   }
 
+  /** Validate a parsed selection against the schema and print it. Every
+   *  field must exist on its parent type, must not require arguments, and
+   *  must carry a sub-selection exactly when its type is composite. */
+  private buildSelection(src: string, typeName: string): string | { error: string } {
+    const tree = parseSelection(src);
+    if (!Array.isArray(tree)) return tree;
+    const budget = { n: 0 };
+    const print = (nodes: SelNode[], parent: string, path: string): string | { error: string } => {
+      const type = this.types.get(parent);
+      const parts: string[] = [];
+      for (const node of nodes) {
+        if (++budget.n > MAX_SELECTION_FIELDS * 2) return { error: 'too many fields' };
+        const at = path ? `${path}.${node.name}` : node.name;
+        if (node.name === '__typename') {
+          if (node.children) return { error: `'${at}' has no fields` };
+          parts.push('__typename');
+          continue;
+        }
+        const field = type?.fields?.find((f) => f.name === node.name);
+        if (!field) return { error: `'${at}' is not a field of ${parent}` };
+        if (field.args.some((a) => a.type.kind === 'NON_NULL' && a.defaultValue == null)) {
+          return { error: `'${at}' requires arguments and cannot be selected` };
+        }
+        const leaf = unwrap(field.type);
+        const kind = this.types.get(leaf.name ?? '')?.kind ?? leaf.kind;
+        const composite = kind === 'OBJECT' || kind === 'INTERFACE' || kind === 'UNION';
+        if (composite && !node.children) return { error: `'${at}' is an object — select its fields with { … }` };
+        if (!composite && node.children) return { error: `'${at}' is a ${kind.toLowerCase()} and has no fields` };
+        if (kind === 'UNION') return { error: `'${at}' is a union — not selectable through 'select'` };
+        if (node.children) {
+          const inner = print(node.children, leaf.name!, at);
+          if (typeof inner !== 'string') return inner;
+          parts.push(`${node.name} ${inner}`);
+        } else {
+          parts.push(node.name);
+        }
+      }
+      return `{ ${parts.join(' ')} }`;
+    };
+    return print(tree, typeName, '');
+  }
+
   async listTools(): Promise<DownstreamTool[]> {
     if (!this.url) throw new Error(`server '${this.name}': not connected`);
     return [...this.ops.values()].map((o) => o.tool);
@@ -200,16 +286,9 @@ export class GraphqlDownstreamClient implements DownstreamClient {
 
     let selection = op.selection;
     if (op.returnsComposite && typeof args.select === 'string' && args.select.trim()) {
-      const s = args.select.trim();
-      if (!SELECT_ALLOWED.test(s)) return errorResult(`'select' may contain only field names, braces and commas`);
-      const wrapped = s.startsWith('{') ? s : `{ ${s} }`;
-      let depth = 0;
-      for (const ch of wrapped) {
-        depth += ch === '{' ? 1 : ch === '}' ? -1 : 0;
-        if (depth < 0) break;
-      }
-      if (depth !== 0) return errorResult(`'select' has unbalanced braces`);
-      selection = wrapped;
+      const built = this.buildSelection(args.select, unwrap(op.field.type).name!);
+      if (typeof built !== 'string') return errorResult(`invalid 'select': ${built.error}`);
+      selection = built;
     }
 
     const decls: string[] = [];

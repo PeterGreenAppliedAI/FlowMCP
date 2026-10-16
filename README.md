@@ -240,8 +240,14 @@ prove. Replay against mutated data catches hardcoding before a human ever review
 The full loop exists and has run end-to-end: `detect.ts` nominates flow candidates from
 execution logs (frequency × cost × success, inputs discovered from cross-run argument
 variance); `flowmcp author` takes an intent, introspects the configured servers'
-read-only tools, has a model write and repair a script in a disposable sandboxed process,
-records it against the real servers, and compiles the trace. Dogfooded on a real
+read-only tools, has a model write and repair a script, runs it isolated, records it
+against the real servers, and compiles the trace. The generated script runs in a separate
+Node child with an empty environment, the permission model granting no filesystem,
+subprocess, worker or addon access, and string/wasm code generation disabled — inside a
+vm context that holds only `tools` and `console`, where only strings cross the bridge.
+The broker keeps the connections and grants only read tools. Node 20/22's permission
+model has no network control, so for genuinely hostile models also run `author` in an
+OS-level sandbox with no egress. Dogfooded on a real
 recurring news-gathering workflow: the compiled flow replaced a multi-minute agentic
 search sweep with one 4.5-second deterministic call at zero model tokens. Nothing in the
 loop is provider-specific — the dogfood happens to use a self-hosted SearXNG wrapper, but

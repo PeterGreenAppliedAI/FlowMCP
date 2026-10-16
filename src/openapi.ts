@@ -122,17 +122,13 @@ export class OpenApiDownstreamClient implements DownstreamClient {
     if (/^https?:\/\//i.test(location)) {
       // Auth headers go to the spec host only when it is the configured API
       // origin — a spec on a public host must never receive the credential.
-      let sameOrigin = false;
+      let apiOrigin: string | undefined;
       try {
-        sameOrigin = this.target.baseUrl !== undefined &&
-          new URL(interpolate(this.target.baseUrl, { env: process.env })).origin === new URL(location).origin;
+        if (this.target.baseUrl !== undefined) apiOrigin = new URL(interpolate(this.target.baseUrl, { env: process.env })).origin;
       } catch {
         // unparseable baseUrl: connect() reports it
       }
-      const res = await fetch(location, {
-        headers: sameOrigin ? this.headers : {},
-        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-      });
+      const res = await fetchWithCredentialScope(location, this.headers, apiOrigin, deadline);
       if (!res.ok) throw new Error(`spec fetch failed: HTTP ${res.status} from ${location}`);
       text = await res.text();
     } else {
@@ -257,6 +253,34 @@ export class OpenApiDownstreamClient implements DownstreamClient {
     this.ops.clear();
     this.base = undefined;
   }
+}
+
+/** GET `url`, following redirects MANUALLY so credentials can never ride
+ *  an automatic hop to another origin: `headers` are sent only on requests
+ *  whose origin equals `credentialOrigin`; every other hop goes bare. (fetch
+ *  strips only Authorization on cross-origin redirects — a custom header such
+ *  as X-Api-Key would be forwarded.) */
+export async function fetchWithCredentialScope(
+  url: string,
+  headers: Record<string, string>,
+  credentialOrigin: string | undefined,
+  deadline: number,
+): Promise<Response> {
+  let current = new URL(url);
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await fetch(current, {
+      headers: credentialOrigin !== undefined && current.origin === credentialOrigin ? headers : {},
+      redirect: 'manual',
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+    });
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!location) return res;
+    await res.body?.cancel().catch(() => {});
+    const next = new URL(location, current);
+    if (next.protocol !== 'http:' && next.protocol !== 'https:') throw new Error(`redirect to unsupported scheme ${next.protocol}`);
+    current = next;
+  }
+  throw new Error(`too many redirects fetching ${url}`);
 }
 
 /** Parse a spec document: JSON first, then YAML. Must be a mapping. */

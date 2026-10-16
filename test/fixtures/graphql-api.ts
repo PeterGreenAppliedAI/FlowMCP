@@ -26,6 +26,7 @@ export const SCHEMA = {
     { kind: 'OBJECT', name: 'Mutation', fields: [
       field('createCustomer', obj('Customer'), [arg('input', nonNull(named('INPUT_OBJECT', 'NewCustomer')))]),
       field('deleteCustomer', scalar('Boolean'), [arg('id', nonNull(scalar('ID')))]),
+      field('resetAll', scalar('Boolean')), // no arguments: the select-injection target
     ] },
     { kind: 'OBJECT', name: 'Customer', fields: [
       field('id', nonNull(scalar('ID'))),
@@ -101,10 +102,12 @@ export async function startGraphqlApi(token: string, opts: { introspection?: boo
         case 'version': return send(200, { data: { version: '1.2.3' } });
         case 'createCustomer': {
           mutations++;
+          if (/\bresetAll\b/.test(query)) mutations += 100; // an injected sibling would execute too
           const input = variables?.input as { name: string };
           return send(200, { data: { createCustomer: { id: `c${10 + mutations}`, name: input.name, status: 'ACTIVE', address: null } } });
         }
         case 'deleteCustomer': mutations++; return send(200, { data: { deleteCustomer: true } });
+        case 'resetAll': mutations++; return send(200, { data: { resetAll: true } });
       }
       send(200, { errors: [{ message: `unknown field ${root}` }] });
     });

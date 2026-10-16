@@ -87,6 +87,25 @@ describe('promote', () => {
       .toThrow(/'filter' is not a scalar — pin it/);
   });
 
+  it('a pin inside an object keeps the other required fields as inputs (review 2026-10-16, P2)', () => {
+    const tool = {
+      name: 'create_ticket',
+      inputSchema: {
+        type: 'object',
+        required: ['body'],
+        properties: {
+          body: { type: 'object', required: ['tenant', 'name'], properties: { tenant: { type: 'string' }, name: { type: 'string' } } },
+        },
+      },
+    };
+    const p = buildPromotion('desk', tool, 'write', { pins: { 'body.tenant': 'EMEA' } });
+    expect(p.inputs).toEqual(['body.name']);
+    expect((p.flow.steps as Array<{ args: unknown }>)[0]!.args).toEqual({ body: { tenant: 'EMEA', name: '{{input.name}}' } });
+    // pinning the whole object still means "no inputs from it"
+    const whole = buildPromotion('desk', tool, 'write', { pins: { body: { tenant: 'EMEA', name: 'fixed' } } });
+    expect(whole.inputs).toEqual([]);
+  });
+
   it('renders a valid flow file that serves and runs', async () => {
     const p = await promote(dir, 'pets', 'getPet');
     const file = join(dir, 'pets_get_pet.flow.json5');

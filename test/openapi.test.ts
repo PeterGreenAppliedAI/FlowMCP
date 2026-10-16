@@ -203,6 +203,34 @@ describe('OpenAPI adapter', () => {
     expect((await c.callTool('getPet', { petId: 'p1' }, soon())).structuredContent).toEqual({ id: 'p1', name: 'Rex' });
   });
 
+  it('never forwards credentials across a spec redirect to another origin (review 2026-10-16, P1)', async () => {
+    const seenKeys: Record<string, string | undefined> = {};
+    const otherKeys: Array<string | undefined> = [];
+    const other = createServer((req, res) => {
+      otherKeys.push(req.headers['x-api-key'] as string | undefined);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ openapi: '3.0.0', paths: {} }));
+    });
+    const otherUrl = await new Promise<string>((r) => other.listen(0, '127.0.0.1', () => r(`http://localhost:${(other.address() as { port: number }).port}`)));
+    const home = createServer((req, res) => {
+      if (req.url === '/away') { res.statusCode = 302; res.setHeader('location', `${otherUrl}/spec.json`); return res.end(); }
+      if (req.url === '/moved') { res.statusCode = 301; res.setHeader('location', '/spec.json'); return res.end(); }
+      seenKeys.home = req.headers['x-api-key'] as string | undefined;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ openapi: '3.0.0', paths: {} }));
+    });
+    const homeUrl = await new Promise<string>((r) => home.listen(0, '127.0.0.1', () => r(`http://127.0.0.1:${(home.address() as { port: number }).port}`)));
+    try {
+      await adapter({ openapi: `${homeUrl}/away`, baseUrl: homeUrl }).connect(soon());
+      expect(otherKeys).toEqual([undefined]); // the hop left the API origin bare
+      await adapter({ openapi: `${homeUrl}/moved`, baseUrl: homeUrl }).connect(soon());
+      expect(seenKeys.home).toBe(KEY); // same-origin redirects keep working
+    } finally {
+      await new Promise<void>((r) => other.close(() => r()));
+      await new Promise<void>((r) => home.close(() => r()));
+    }
+  });
+
   it('does not send credentials when fetching a spec from another origin', async () => {
     let specAuth: string | undefined = 'unset';
     const specHost = createServer((req, res) => {

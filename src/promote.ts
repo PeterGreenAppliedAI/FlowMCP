@@ -69,7 +69,12 @@ export function buildPromotion(
     }
     return { schema: s, required: req };
   };
-  const pinned = (path: string) => Object.keys(pins).some((p) => p === path || path.startsWith(`${p}.`) || p.startsWith(`${path}.`));
+  // A path is fully pinned when it or an ancestor is pinned. A pin BELOW a
+  // path (body.tenant under body) pins only that field — the rest of the
+  // object still needs inputs (review 2026-10-16: treating a partial pin as
+  // whole dropped required siblings and produced invalid requests).
+  const pinned = (path: string) => Object.keys(pins).some((p) => p === path || path.startsWith(`${p}.`));
+  const pinnedBelow = (path: string) => Object.keys(pins).some((p) => p.startsWith(`${path}.`));
 
   // required arguments, descending one level into an object-typed required arg
   const needed: string[] = [];
@@ -80,7 +85,7 @@ export function buildPromotion(
       const innerReq = (s.required as string[] | undefined) ?? [];
       // nothing inside is required, yet the argument is: omitting it would
       // send a call the API rejects (or worse, interprets) — make it explicit
-      if (!innerReq.length) throw new Error(`required argument '${k}' is not a scalar — pin it with --pin ${k}=<json>`);
+      if (!innerReq.length && !pinnedBelow(k)) throw new Error(`required argument '${k}' is not a scalar — pin it with --pin ${k}=<json>`);
       for (const ik of innerReq) {
         const path = `${k}.${ik}`;
         if (pinned(path)) continue;

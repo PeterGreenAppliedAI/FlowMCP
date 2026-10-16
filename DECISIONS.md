@@ -2,6 +2,59 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-10-16 — external review of 6bbcb87: four findings, all reproduced
+
+**What didn't work:**
+1. **(P1) The authoring "sandbox" was not one.** `author-runner` executed
+   model-generated code with `new Function` in its own process — the process
+   holding the downstream connections, with the inherited environment and
+   full filesystem, network and subprocess access. The README called it a
+   "disposable sandboxed process"; *disposable* was true, *sandboxed* was not.
+   This predates the any-API work (it shipped with `author` in v0.7).
+2. **(P1) GraphQL `select` could inject root fields.** The check allowed
+   field-name characters and balanced braces, so `{ id } resetAll` passed and
+   became `mutation { createCustomer { id } resetAll }` — an unapproved
+   mutation riding an allow-listed one.
+3. **(P1) OpenAPI spec fetches leaked credentials on redirect.** The origin
+   was checked once, then `fetch` followed redirects itself; it strips only
+   `Authorization` across origins, so `X-Api-Key` reached a foreign host. The
+   same flaw sat in `discover`'s spec probe (not in the review; found while
+   fixing).
+4. **(P2) `promote` treated a pin inside an object as pinning all of it**, so
+   `--pin body.tenant=…` dropped the required `body.name` and generated an
+   invalid request.
+
+**Why tests missed them:** every test exercised the *intended* input. The
+select tests checked forbidden characters, not forbidden *structure*; the
+spec-fetch test covered a cross-origin spec but not a redirect to one; the
+promote test pinned whole objects only; and no test ran hostile code through
+the runner at all. A first draft of the discover redirect test even passed
+against the leaking code — it kept only the LAST request's header, and
+discover's second, credential-free fetch overwrote the leak. Each regression
+test below was confirmed to fail on the pre-fix code.
+
+**The fix:**
+1. `src/sandbox.ts`: an empty-env child under the permission model with no
+   grants and codegen disallowed, running the script in a codegen-disabled vm
+   context; only primitives cross the bridge, and the broker grants tool
+   names. Stated limit: no network control in Node 20/22's permission model
+   (see README). Test: test/sandbox.test.ts (11 escape probes plus a control
+   that must come back OPEN).
+2. `select` is parsed into a tree (exactly one selection set), validated
+   against the schema, and printed — the caller's text never reaches the
+   document. Tests: test/graphql.test.ts "cannot smuggle…", "validates select…".
+3. `fetchWithCredentialScope`: manual redirects; credentials only on hops to
+   the API origin. Tests: test/openapi.test.ts and test/discover.test.ts
+   "…redirect to another origin".
+4. Fully-pinned vs pinned-below are distinct. Test: test/promote.test.ts
+   "a pin inside an object…".
+
+The reviewer also reported 14 failures on a local Windows Node 22 run of
+6bbcb87 (remote MCP, HTTP discovery, temp-dir cleanup). The temp-dir cleanup
+race was fixed in 90a330e, and windows-latest CI is green on Node 20 and 22
+from that commit. The other local failures have not been reproduced; their
+root cause is still unconfirmed.
+
 ## 2026-10-16 — any API, not just MCP: adapters behind one interface
 
 **What didn't work:** composition was MCP-only. A plain REST or GraphQL API
