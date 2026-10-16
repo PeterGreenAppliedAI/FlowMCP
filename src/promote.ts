@@ -32,6 +32,75 @@ export interface PromoteOptions {
   inputs?: string[];
   pins?: Record<string, unknown>;
   description?: string;
+  /** Result fields to keep, e.g. ['total_count', 'items[].full_name'].
+   *  Real API payloads are mostly noise (GitHub: 3 repos = 18KB, mostly
+   *  *_url fields) — a model-facing tool should return what it needs. */
+  pick?: string[];
+}
+
+// Model-facing text: markdown links -> their text, emphasis/code marks
+// dropped, the adapter's 'METHOD /path — ' prefix removed (it tells a model
+// nothing), and long text cut at a sentence or word boundary — never
+// mid-word, which is what plain slicing did to every GitHub description.
+export function tidy(text: string, max: number): string {
+  let t = text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*`]+/g, '')
+    .replace(/^(?:GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE) \S+ — /, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max - 1);
+  const sentence = cut.lastIndexOf('. ');
+  if (sentence >= max / 2) return cut.slice(0, sentence + 1);
+  const word = cut.lastIndexOf(' ');
+  t = (word > 0 ? cut.slice(0, word) : cut).replace(/[\s,;:—-]+$/, '');
+  return `${t}…`;
+}
+
+const IDENT_PART = /^[A-Za-z_$][\w$]*$/;
+const pathExpr = (root: string, path: string) =>
+  root + path.split('.').filter(Boolean).map((seg) => (IDENT_PART.test(seg) ? `.${seg}` : `[${JSON.stringify(seg)}]`)).join('');
+
+// --pick -> steps: scalars project from the result; ONE array group
+// (`items[].x`) becomes a map over at most 10 items.
+function pickSteps(picks: string[]): { steps: Json[]; output: string } {
+  const scalars: string[] = [];
+  let arrayPrefix: string | undefined;
+  const arrayFields: string[] = [];
+  for (const raw of picks.flatMap((p) => p.split(',')).map((p) => p.trim()).filter(Boolean)) {
+    const at = raw.indexOf('[]');
+    if (at === -1) { scalars.push(raw); continue; }
+    const prefix = raw.slice(0, at);
+    const rest = raw.slice(at + 2).replace(/^\./, '');
+    if (rest.includes('[]')) throw new Error(`--pick '${raw}': only one level of [] is supported`);
+    if (arrayPrefix !== undefined && arrayPrefix !== prefix) throw new Error(`--pick: all [] fields must share one array (got '${arrayPrefix}[]' and '${prefix}[]')`);
+    if (!rest) throw new Error(`--pick '${raw}': name a field after []`);
+    arrayPrefix = prefix;
+    arrayFields.push(rest);
+  }
+  const keyOf = (path: string, taken: Set<string>) => {
+    let k = path.split('.').pop()!.replace(/[^A-Za-z0-9_]/g, '_');
+    if (taken.has(k)) k = path.replace(/[^A-Za-z0-9_]/g, '_');
+    if (taken.has(k)) throw new Error(`--pick: duplicate field '${path}'`);
+    taken.add(k);
+    return k;
+  };
+  const steps: Json[] = [];
+  const obj = (pairs: Array<[string, string]>) => `{ ${pairs.map(([k, v]) => `${k}: ${v}`).join(', ')} }`;
+  if (arrayPrefix !== undefined) {
+    const taken = new Set<string>();
+    steps.push({
+      id: 'picked_items', kind: 'map', over: `${pathExpr('steps.result', arrayPrefix)}[0:10]`, as: 'item',
+      step: { kind: 'transform', expr: obj(arrayFields.map((f) => [keyOf(f, taken), pathExpr('item', f)])) },
+    });
+  }
+  if (!scalars.length) return { steps, output: '{{steps.picked_items}}' };
+  const taken = new Set<string>();
+  const pairs: Array<[string, string]> = scalars.map((f) => [keyOf(f, taken), pathExpr('steps.result', f)]);
+  if (arrayPrefix !== undefined) pairs.push([keyOf(arrayPrefix || 'items', taken), 'steps.picked_items']);
+  steps.push({ id: 'picked', kind: 'transform', expr: obj(pairs) });
+  return { steps, output: '{{steps.picked}}' };
 }
 
 export interface Promotion { flow: Json; inputs: string[]; write: boolean; warnings: string[] }
@@ -124,8 +193,11 @@ export function buildPromotion(
   for (const [path, n] of names) {
     const { schema: s, required: req } = at(path);
     const type = scalarOf(s)!;
-    const enumNote = Array.isArray(s!.enum) ? ` One of: ${(s!.enum as unknown[]).join(', ')}.` : '';
-    const desc = `${String(s!.description ?? path).replace(/\s+/g, ' ')}${enumNote}`.slice(0, 200);
+    // the allowed values are the most useful part — budget them FIRST
+    const values = Array.isArray(s!.enum) ? (s!.enum as unknown[]).map(String).filter(Boolean) : [];
+    const enumNote = values.length ? ` One of: ${values.join(', ')}.`.slice(0, 120) : '';
+    const base = tidy(String(s!.description ?? path), 199 - enumNote.length);
+    const desc = `${base}${enumNote && base && !/[.!?…]$/.test(base) ? '.' : ''}${enumNote}`.trim();
     const param: Json = { type, description: desc || path, required: req };
     if (!req && s!.default !== undefined && typeof s!.default === type) param.default = s!.default;
     input[n] = param;
@@ -147,17 +219,20 @@ export function buildPromotion(
   for (const [path, n] of names) setPath(path, `{{input.${n}}}`);
 
   const flowName = opts.name ?? `${server}_${tool.name}`.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^[^a-z]+|_+$/g, '');
-  const toolDesc = (tool.description ?? tool.name).replace(/\s+/g, ' ').trim();
-  const description = (opts.description ?? `WHEN TO USE: ${toolDesc}`).slice(0, 300);
-  if (!opts.description && toolDesc.length > 287) warnings.push('description truncated to 300 chars — consider --description');
+  const toolDesc = tidy(tool.description ?? tool.name, 1_000_000);
+  const description = (opts.description ?? `WHEN TO USE: ${tidy(toolDesc, 287)}`).slice(0, 300);
+  if (!opts.description && toolDesc.length > 287) warnings.push('description shortened to fit 300 chars — consider --description');
 
   const write = admitted === 'write';
+  const picked = opts.pick?.length ? pickSteps(opts.pick) : { steps: [], output: '{{steps.result}}' };
   const flow: Json = {
     name: flowName,
     description,
     input,
-    steps: [{ id: 'result', kind: 'mcp_call', server, tool: tool.name, args }],
-    output: '{{steps.result}}',
+    // with --pick the projection is what reaches the model, so the raw call
+    // may exceed the default 8K cap — truncating first would break the pick
+    steps: [{ id: 'result', kind: 'mcp_call', server, tool: tool.name, args, ...(picked.steps.length ? { maxResultChars: 500_000 } : {}) }, ...picked.steps],
+    output: picked.output,
     ...(write
       ? { proposal: `About to call ${tool.name} on ${server}${names.size ? ` with ${[...names.values()].map((n) => `${n}={{input.${n}}}`).join(', ')}` : ''}.` }
       : {}),
@@ -211,13 +286,13 @@ function values(argv: string[], name: string): string[] {
 
 export async function promoteCli(): Promise<void> {
   const argv = process.argv.slice(2);
-  const valued = new Set(['--flows', '--name', '--input', '--pin', '--description']);
+  const valued = new Set(['--flows', '--name', '--input', '--pin', '--description', '--pick']);
   const positional = argv.filter((a, i) => !a.startsWith('--') && !valued.has(argv[i - 1] ?? ''));
   const [server, tool] = positional;
   if (!server || !tool) {
     process.stderr.write(
       'usage: flowmcp promote <server> <tool> [--flows <dir>] [--name <flow_name>] [--input <arg> ...]\n' +
-        '         [--pin <arg>=<json|text> ...] [--description "<WHEN TO USE: …>"] [--force]\n',
+        '         [--pin <arg>=<json|text> ...] [--pick <field>[,<items[].field>…]] [--description "<WHEN TO USE: …>"] [--force]\n',
     );
     process.exit(1);
   }
@@ -236,6 +311,7 @@ export async function promoteCli(): Promise<void> {
     inputs: values(argv, '--input'),
     pins,
     description: values(argv, '--description')[0],
+    pick: values(argv, '--pick'),
   });
   const file = join(dir, `${p.flow.name as string}.flow.json5`);
   if (existsSync(file) && !argv.includes('--force')) throw new Error(`${file} exists — pass --force to overwrite`);

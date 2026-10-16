@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import JSON5 from 'json5';
 import { projectRoot, RpcClient, spawnServer } from './helpers.js';
-import { buildPromotion, promote, renderFlow } from '../src/promote.js';
+import { buildPromotion, promote, renderFlow, tidy } from '../src/promote.js';
+import { executeFlow } from '../src/engine.js';
 import { flowSchema } from '../src/flow-schema.js';
 
 const fixtures = join(projectRoot, 'test/fixtures/openapi-flows');
@@ -135,5 +136,65 @@ describe('promote', () => {
     });
     expect(stderr).toMatch(/4 tools exceed the surface budget of 2/);
     expect(stderr).toMatch(/flows valid/);
+  });
+});
+
+describe('promote on real-world tool descriptions and payloads (2026-10-16, GitHub)', () => {
+  const ghSearch = {
+    name: 'search_repos',
+    description: 'GET /search/repositories — Search repositories — Find repositories via various criteria. This method returns up to 100 results [per page](https://docs.github.com/rest/guides/using-pagination-in-the-rest-api). When searching for repositories, you can get text match metadata for the **name** and **description** fields when you pass the `text-match` media type. For more details about how to receive highlighted search results, see Text match metadata.',
+    inputSchema: {
+      type: 'object',
+      required: ['q'],
+      properties: {
+        q: { type: 'string', description: 'The query contains one or more search keywords and qualifiers.' },
+        sort: {
+          type: 'string',
+          enum: ['stars', 'forks', 'help-wanted-issues', 'updated'],
+          description: 'Sorts the results of your query by number of `stars`, `forks`, or `help-wanted-issues` or how recently the items were `updated`. Default: [best match](https://docs.github.com/rest/search/search#ranking-search-results)',
+        },
+      },
+    },
+    annotations: { readOnlyHint: true },
+  };
+
+  it('tidies model-facing text: no markdown, no method prefix, never cut mid-word', () => {
+    const p = buildPromotion('github', ghSearch, 'read', { inputs: ['sort'] });
+    const d = p.flow.description as string;
+    expect(d.startsWith('WHEN TO USE: Search repositories — Find repositories')).toBe(true);
+    expect(d).not.toMatch(/\]\(|\*\*|`|GET \//);
+    expect(d.length).toBeLessThanOrEqual(300);
+    expect(d).toMatch(/[.…]$/);
+    expect(tidy('alpha beta gamma delta', 12)).toBe('alpha beta…');
+  });
+
+  it('keeps the allowed values even when the description is long', () => {
+    const p = buildPromotion('github', ghSearch, 'read', { inputs: ['sort'] });
+    const sort = (p.flow.input as Record<string, { description: string }>).sort!.description;
+    expect(sort).toMatch(/One of: stars, forks, help-wanted-issues, updated\.$/);
+    expect(sort.length).toBeLessThanOrEqual(200);
+    expect(sort).toContain('Default: best match.');
+  });
+
+  it('--pick projects scalars and one array group, and the flow runs', async () => {
+    const p = buildPromotion('github', ghSearch, 'read', { pick: ['total_count,items[].full_name', 'items[].owner.login', 'license.spdx_id'] });
+    expect(flowSchema.safeParse(p.flow).success).toBe(true);
+    const steps = p.flow.steps as Array<Record<string, unknown>>;
+    expect(steps[0]!.maxResultChars).toBe(500_000); // projection happens AFTER the call
+    // run the generated steps against a canned result (no network)
+    const payload = { total_count: 2, license: { spdx_id: 'MIT' }, items: [{ full_name: 'a/b', owner: { login: 'a' }, noise_url: 'x' }, { full_name: 'c/d', owner: { login: 'c' } }] };
+    const pool = { has: () => true, call: async () => ({ content: [{ type: 'text', text: '' }], structuredContent: payload }) };
+    const run = await executeFlow(flowSchema.parse(p.flow), { q: 'x' }, { mcp: pool as never });
+    expect(run.status).toBe('complete');
+    expect(JSON.parse((run as { text: string }).text)).toEqual({ total_count: 2, spdx_id: 'MIT', items: [{ full_name: 'a/b', login: 'a' }, { full_name: 'c/d', login: 'c' }] });
+  });
+
+  it('--pick on an array result, and invalid picks refuse', () => {
+    const p = buildPromotion('github', ghSearch, 'read', { pick: ['[].name'] });
+    expect(p.flow.output).toBe('{{steps.picked_items}}');
+    expect((p.flow.steps as Array<{ over?: string }>)[1]!.over).toBe('steps.result[0:10]');
+    expect(() => buildPromotion('github', ghSearch, 'read', { pick: ['a[].b', 'c[].d'] })).toThrow(/share one array/);
+    expect(() => buildPromotion('github', ghSearch, 'read', { pick: ['a[].b[].c'] })).toThrow(/one level/);
+    expect(() => buildPromotion('github', ghSearch, 'read', { pick: ['x.name', 'y.name', 'y_name'] })).toThrow(/duplicate/);
   });
 });
