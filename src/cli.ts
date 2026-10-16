@@ -9,6 +9,7 @@
 //   flowmcp compile  <run.v0.json> …        compile a recorded trace into a flow
 //   flowmcp detect   <executions.jsonl> …   nominate flows from execution logs
 //   flowmcp discover <url | spec> …         probe an endpoint, draft a servers.json5 entry
+//   flowmcp promote  <server> <tool> …      put one admitted operation on the surface as a flow
 //
 // Legacy flag style (`flowmcp --flows x --validate`) still works: no
 // subcommand means serve, and serve reads the same flags it always did.
@@ -32,6 +33,8 @@ const USAGE = `flowmcp — workflows are the tools
   flowmcp discover <url | spec-file> [--name <server>] [--header 'K: V'] [--type mcp|openapi|graphql]
   flowmcp discover --stdio <command> [args...]
                                              find an endpoint's tools, print a fail-closed servers.json5 draft
+  flowmcp promote  <server> <tool> [--flows <dir>] [--input <arg>] [--pin <arg>=<value>]
+                                             write a one-step flow exposing one admitted operation
 
 Flow directory: --flows, or FLOWMCP_FLOWS_DIR, or ./flows.
 Format spec: FORMAT.md · https://github.com/PeterGreenAppliedAI/FlowMCP
@@ -75,6 +78,10 @@ async function main(): Promise<void> {
     case 'discover':
       process.argv.splice(2, 1);
       await (await import('./discover.js')).discoverCli();
+      return;
+    case 'promote':
+      process.argv.splice(2, 1);
+      await (await import('./promote.js')).promoteCli();
       return;
     case 'compile-graphql':
       process.argv.splice(2, 1);

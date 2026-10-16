@@ -156,6 +156,14 @@ lists every tool as a declared read or not, and prints a draft entry with
 empty `attestReadOnly`/`allow` lists — nothing beyond the endpoint's own
 declared reads is callable until you review it.
 
+Sometimes one operation *is* the workflow. `flowmcp promote pets getPet`
+writes it out as an ordinary one-step flow file — required scalar arguments
+become inputs, constants are pinned with `--pin tenant=EMEA`, writes get a
+confirmation proposal, and a tool that `servers.json5` does not already admit
+is refused. Promotion is per operation, never a whole-server passthrough: the
+server warns when the served surface passes 12 tools (`FLOWMCP_TOOL_BUDGET`),
+because the benchmark showed small models degrading as the surface grows.
+
 Then use an `mcp_call` step like any other (REST operations take path/query
 parameters as arguments and the request body as `body`):
 
@@ -203,6 +211,7 @@ One entry point for the whole loop (from a clone: `npx tsx src/cli.ts <cmd>`, or
 | `flowmcp shadow <flow> --agent '<cmd>' [--judge '<cmd>']` | shadow-verify a flow against a host-supplied agent |
 | `flowmcp compile-graphql <query-log.jsonl> --server <name> --tool <tool>` | compile recurring GraphQL operations into candidate flows |
 | `flowmcp discover <url \| spec-file> [--header 'K: V'] [--name <server>]` | find an endpoint's tools (OpenAPI/Swagger spec, MCP, GraphQL; or `--stdio <cmd…>`) and print a fail-closed `servers.json5` draft |
+| `flowmcp promote <server> <tool> [--input <arg>] [--pin <arg>=<value>]` | write a one-step flow exposing one admitted operation (≤3 scalar inputs; writes confirmation-gated) |
 
 `author` needs an OpenAI-compatible endpoint via `--gateway` or the `GATEWAY` env var —
 there is no default endpoint or model; any local or hosted model works.

@@ -339,6 +339,17 @@ async function main(): Promise<void> {
     const writeGates = new Map(flows.map((f) => [f.name, topLevelWriteStepIds(f, servers)]));
     state = { flows, pool: new McpPool(servers, { baseDir: dir }), effects, writeGates, approvals: new Map(), clientElicitation: false, registry, dir };
     log(`loaded ${flows.length} flows from ${dir}: ${flows.map((f) => f.name).join(', ')}`);
+    // Surface budget: the benchmark's mixed 37-tool surface lost to the
+    // small façade, with the weakest model collapsing to zero calls. Promoted
+    // single operations make this easy to drift into — say so, never refuse.
+    const budget = Number(process.env.FLOWMCP_TOOL_BUDGET ?? 12);
+    if (Number.isFinite(budget) && budget > 0 && flows.length > budget) {
+      log(
+        `warning: ${flows.length} tools exceed the surface budget of ${budget} — small models degrade as the ` +
+          `tool surface grows; compose operations into flows instead of promoting them one by one ` +
+          `(FLOWMCP_TOOL_BUDGET adjusts this warning)`,
+      );
+    }
     const serverNames = Object.keys(servers);
     if (serverNames.length) log(`downstream MCP servers: ${serverNames.join(', ')}`);
   } catch (e) {
