@@ -149,6 +149,13 @@ GraphQL endpoints work the same way — `crm: { graphql: 'https://…/graphql',
 headers: { Authorization: 'Bearer {{env.CRM_TOKEN}}' }, allow: ['createCustomer'] }`
 introspects the schema; Query fields are reads, Mutation fields are writes.
 
+Don't know what an endpoint speaks? `flowmcp discover https://api.example.com
+--header 'Authorization: Bearer {{env.TOKEN}}'` probes it with non-writing
+requests only (spec GETs, an MCP `initialize`, a GraphQL `{ __typename }`),
+lists every tool as a declared read or not, and prints a draft entry with
+empty `attestReadOnly`/`allow` lists — nothing beyond the endpoint's own
+declared reads is callable until you review it.
+
 Then use an `mcp_call` step like any other (REST operations take path/query
 parameters as arguments and the request body as `body`):
 
@@ -195,6 +202,7 @@ One entry point for the whole loop (from a clone: `npx tsx src/cli.ts <cmd>`, or
 | `flowmcp detect <executions.jsonl>` | nominate recurring procedures from execution logs |
 | `flowmcp shadow <flow> --agent '<cmd>' [--judge '<cmd>']` | shadow-verify a flow against a host-supplied agent |
 | `flowmcp compile-graphql <query-log.jsonl> --server <name> --tool <tool>` | compile recurring GraphQL operations into candidate flows |
+| `flowmcp discover <url \| spec-file> [--header 'K: V'] [--name <server>]` | find an endpoint's tools (OpenAPI/Swagger spec, MCP, GraphQL; or `--stdio <cmd…>`) and print a fail-closed `servers.json5` draft |
 
 `author` needs an OpenAI-compatible endpoint via `--gateway` or the `GATEWAY` env var —
 there is no default endpoint or model; any local or hosted model works.

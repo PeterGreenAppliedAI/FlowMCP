@@ -70,8 +70,17 @@ export async function startGraphqlApi(token: string, opts: { introspection?: boo
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify(body));
       };
+      if (new URL(req.url ?? '/', 'http://x').pathname !== '/graphql') return send(404, { error: 'not found' });
       if (req.headers.authorization !== `Bearer ${token}`) return send(401, { errors: [{ message: 'unauthorized' }] });
-      const { query, variables } = JSON.parse(raw || '{}') as { query: string; variables?: Record<string, unknown> };
+      let parsed: { query?: unknown; variables?: Record<string, unknown> } = {};
+      try {
+        parsed = JSON.parse(raw || '{}') as typeof parsed;
+      } catch {
+        // fall through to the 400 below
+      }
+      if (req.method !== 'POST' || typeof parsed.query !== 'string') return send(400, { errors: [{ message: 'expected a POST with a query' }] });
+      const { query, variables } = parsed as { query: string; variables?: Record<string, unknown> };
+      if (query.replace(/\s+/g, '') === '{__typename}') return send(200, { data: { __typename: 'Query' } });
       if (query.includes('__schema')) {
         if (opts.introspection === false) return send(200, { errors: [{ message: 'GraphQL introspection is not allowed' }] });
         return send(200, { data: { __schema: SCHEMA } });
