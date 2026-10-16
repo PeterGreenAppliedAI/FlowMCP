@@ -41,7 +41,47 @@ const MAX_REDIRECTS = 3;
 
 type Json = Record<string, unknown>;
 
-interface ParamPlan { name: string; key: string; in: 'path' | 'query' | 'header'; required: boolean }
+interface ParamPlan {
+  name: string; key: string; in: 'path' | 'query' | 'header'; required: boolean;
+  style: string; explode: boolean;
+  /** Allowed values (schema.enum, or items.enum for arrays) — checked before sending. */
+  allowed?: unknown[];
+}
+
+/** Body property name -> its OpenAPI `encoding` (form bodies). */
+type Encoding = Record<string, { style?: string; explode?: boolean }>;
+
+// OpenAPI parameter/form serialization (3.x §4.8.12.4, style values):
+//   form + explode   k=1&k=2 ; objects spread into their own keys
+//   form, no explode k=1,2   ; objects k=a,1,b,2
+//   deepObject       k[a]=1, nested k[a][b]=1, arrays k[0]=x (the bracket
+//                    convention APIs such as Stripe use for nested input)
+//   pipeDelimited / spaceDelimited  arrays joined by | or space
+export function serialize(name: string, value: unknown, style: string, explode: boolean): Array<[string, string]> {
+  const scalar = (v: unknown) => (typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v));
+  if (style === 'deepObject' || (style === 'form' && explode && value !== null && typeof value === 'object' && !Array.isArray(value) && hasNested(value))) {
+    const out: Array<[string, string]> = [];
+    const walk = (prefix: string, v: unknown) => {
+      if (Array.isArray(v)) v.forEach((x, i) => walk(`${prefix}[${i}]`, x));
+      else if (v !== null && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(`${prefix}[${k}]`, x);
+      else if (v !== undefined) out.push([prefix, v === null ? '' : String(v)]);
+    };
+    if (value !== null && typeof value === 'object') walk(name, value);
+    else out.push([name, scalar(value)]);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    if (style === 'pipeDelimited') return [[name, value.map(scalar).join('|')]];
+    if (style === 'spaceDelimited') return [[name, value.map(scalar).join(' ')]];
+    return explode ? value.map((v) => [name, scalar(v)] as [string, string]) : [[name, value.map(scalar).join(',')]];
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+    return explode ? entries.map(([k, v]) => [k, scalar(v)] as [string, string]) : [[name, entries.flatMap(([k, v]) => [k, scalar(v)]).join(',')]];
+  }
+  return [[name, scalar(value)]];
+}
+const hasNested = (o: object) => Object.values(o).some((v) => v !== null && typeof v === 'object');
 
 interface Operation {
   tool: DownstreamTool;
@@ -50,6 +90,7 @@ interface Operation {
   params: ParamPlan[];
   bodyKey?: string;
   bodyType?: 'json' | 'form';
+  encoding?: Encoding;
   bodyRequired: boolean;
   /** Set when the operation is listed but cannot be called (fail-closed). */
   unsupported?: string;
@@ -160,18 +201,24 @@ export class OpenApiDownstreamClient implements DownstreamClient {
         if (p.required) return errorResult(`missing required parameter '${p.key}'`);
         continue;
       }
-      if (typeof value === 'object' && !Array.isArray(value)) {
-        return errorResult(`parameter '${p.key}' must be a scalar or array, got an object`);
+      if (p.allowed) {
+        const bad = (Array.isArray(value) ? value : [value]).find((v) => !p.allowed!.includes(v) && !p.allowed!.map(String).includes(String(v)));
+        if (bad !== undefined) {
+          return errorResult(`parameter '${p.key}' must be one of ${p.allowed.map((v) => JSON.stringify(v)).join(', ')} — got ${JSON.stringify(bad)}`);
+        }
       }
+      const isObject = typeof value === 'object' && !Array.isArray(value);
       if (p.in === 'path') {
+        if (typeof value === 'object') return errorResult(`path parameter '${p.key}' must be a scalar`);
         const s = String(value);
         // '.'/'..' survive encodeURIComponent and would be resolved away by URL
         // normalization — a path parameter must never walk the API's path.
         if (s === '.' || s === '..') return errorResult(`path parameter '${p.key}' may not be '${s}'`);
         path = path.split(`{${p.name}}`).join(encodeURIComponent(s));
       } else if (p.in === 'query') {
-        for (const v of Array.isArray(value) ? value : [value]) search.append(p.name, String(v));
+        for (const [k, v] of serialize(p.name, value, p.style, p.explode)) search.append(k, v);
       } else {
+        if (isObject) return errorResult(`header parameter '${p.key}' must be a scalar or array`);
         headers[p.name] = Array.isArray(value) ? value.join(',') : String(value);
       }
     }
@@ -193,7 +240,13 @@ export class OpenApiDownstreamClient implements DownstreamClient {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
           return errorResult(`'${op.bodyKey}' must be an object for a form-encoded body`);
         }
-        body = new URLSearchParams(Object.entries(value).map(([k, v]) => [k, String(v)])).toString();
+        const form = new URLSearchParams();
+        for (const [k, v] of Object.entries(value)) {
+          if (v === undefined) continue;
+          const enc = op.encoding?.[k];
+          for (const [fk, fv] of serialize(k, v, enc?.style ?? 'form', enc?.explode ?? (enc?.style ?? 'form') === 'form')) form.append(fk, fv);
+        }
+        body = form.toString();
         headers['content-type'] = 'application/x-www-form-urlencoded';
       } else {
         body = JSON.stringify(value);
@@ -314,7 +367,7 @@ export function fromSwagger2(spec: Json): Json {
     let requestBody: Json | undefined;
     const form: { properties: Json; required: string[] } = { properties: {}, required: [] };
     for (const raw of params ?? []) {
-      const p = deref(spec, raw) as Json;
+      const p = resolveRef(spec, raw);
       if (p.in === 'body') {
         requestBody = { required: p.required === true, description: p.description, content: { 'application/json': { schema: p.schema ?? {} } } };
       } else if (p.in === 'formData') {
@@ -336,7 +389,7 @@ export function fromSwagger2(spec: Json): Json {
   };
   const paths: Json = {};
   for (const [path, rawItem] of Object.entries((spec.paths ?? {}) as Record<string, Json>)) {
-    const item = deref(spec, rawItem) as Json;
+    const item = resolveRef(spec, rawItem);
     const next: Json = {};
     if (item.parameters) next.parameters = convertParams(item.parameters as Json[], globalConsumes).params;
     for (const method of METHODS) {
@@ -364,22 +417,45 @@ function serverUrl(spec: Json): string | undefined {
   return first.url.replace(/\{([^}]+)\}/g, (m, v: string) => first.variables?.[v]?.default ?? m);
 }
 
-// Resolve local JSON pointers (#/components/...). Cycles and external refs
-// collapse to an empty schema — a doc gap, never an infinite expansion.
-function deref(spec: Json, node: unknown, seen: string[] = []): unknown {
-  if (Array.isArray(node)) return node.map((n) => deref(spec, n, seen));
-  if (!node || typeof node !== 'object') return node;
-  const ref = (node as Json).$ref;
-  if (typeof ref === 'string') {
-    if (!ref.startsWith('#/') || seen.includes(ref) || seen.length > 32) return {};
+// Follow a $ref chain at the TOP of a node only (path items, parameters,
+// request bodies). Never recurses into the node — that is deref's job, and
+// only for input schemas.
+function resolveRef(spec: Json, node: unknown): Json {
+  let cur = node;
+  for (let hops = 0; hops < 16 && cur && typeof cur === 'object' && typeof (cur as Json).$ref === 'string'; hops++) {
+    const ref = (cur as Json).$ref as string;
+    if (!ref.startsWith('#/')) return {};
     let target: unknown = spec;
     for (const part of ref.slice(2).split('/')) {
       const key = part.replace(/~1/g, '/').replace(/~0/g, '~');
       target = target && typeof target === 'object' ? (target as Json)[key] : undefined;
     }
-    return target === undefined ? {} : deref(spec, target, [...seen, ref]);
+    cur = target;
   }
-  return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, deref(spec, v, seen)]));
+  return cur && typeof cur === 'object' && !Array.isArray(cur) ? (cur as Json) : {};
+}
+
+// Inline local JSON pointers (#/components/...) into an INPUT schema, under a
+// node budget. Real specs (Stripe) share schemas so densely that full
+// inlining is exponential without ever forming a cycle — it exhausted a 2GB
+// heap. Cycles, external refs, and anything past the budget collapse to {}
+// (any JSON): a documentation gap, never an unbounded expansion.
+export const SCHEMA_NODE_BUDGET = 4000;
+interface Budget { left: number; truncated: boolean }
+function deref(spec: Json, node: unknown, budget: Budget, seen: string[] = []): unknown {
+  if (Array.isArray(node)) return node.map((n) => deref(spec, n, budget, seen));
+  if (!node || typeof node !== 'object') return node;
+  if (--budget.left < 0) {
+    budget.truncated = true;
+    return {};
+  }
+  const ref = (node as Json).$ref;
+  if (typeof ref === 'string') {
+    if (!ref.startsWith('#/') || seen.includes(ref) || seen.length > 32) return {};
+    const target = resolveRef(spec, { $ref: ref });
+    return deref(spec, target, budget, [...seen, ref]);
+  }
+  return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, deref(spec, v, budget, seen)]));
 }
 
 function toolName(operationId: unknown, method: string, path: string): string {
@@ -392,18 +468,19 @@ function indexOperations(spec: Json): Map<string, Operation> {
   const ops = new Map<string, Operation>();
   const paths = (spec.paths ?? {}) as Record<string, Json>;
   for (const [path, rawItem] of Object.entries(paths)) {
-    const item = deref(spec, rawItem) as Json;
-    const shared = (item.parameters ?? []) as Json[];
+    const item = resolveRef(spec, rawItem);
+    const shared = ((item.parameters ?? []) as unknown[]).map((p) => resolveRef(spec, p));
     for (const method of METHODS) {
       const opRaw = item[method] as Json | undefined;
       if (!opRaw) continue;
       const op = opRaw;
+      const budget: Budget = { left: SCHEMA_NODE_BUDGET, truncated: false };
       let name = toolName(op.operationId, method, path);
       for (let n = 2; ops.has(name); n++) name = `${toolName(op.operationId, method, path)}_${n}`;
 
       // Operation-level parameters override path-level ones (same name + in).
       const byKey = new Map<string, Json>();
-      for (const p of [...shared, ...((op.parameters ?? []) as Json[])]) byKey.set(`${p.in}:${p.name}`, p);
+      for (const p of [...shared, ...((op.parameters ?? []) as unknown[]).map((x) => resolveRef(spec, x))]) byKey.set(`${p.in}:${p.name}`, p);
 
       const properties: Json = {};
       const required: string[] = [];
@@ -420,9 +497,17 @@ function indexOperations(spec: Json): Map<string, Operation> {
         let key = pname;
         if (key in properties) key = `${p.in}_${pname}`;
         const isRequired = p.in === 'path' || p.required === true;
-        params.push({ name: pname, key, in: p.in, required: isRequired });
+        const pschema = (deref(spec, p.schema, budget) as Json | undefined) ?? { type: 'string' };
+        const style = typeof p.style === 'string' ? p.style : p.in === 'query' ? 'form' : 'simple';
+        const allowed = Array.isArray(pschema.enum) ? pschema.enum
+          : Array.isArray((pschema.items as Json | undefined)?.enum) ? ((pschema.items as Json).enum as unknown[]) : undefined;
+        params.push({
+          name: pname, key, in: p.in, required: isRequired, style,
+          explode: typeof p.explode === 'boolean' ? p.explode : style === 'form',
+          ...(allowed ? { allowed } : {}),
+        });
         properties[key] = {
-          ...((p.schema as Json | undefined) ?? { type: 'string' }),
+          ...pschema,
           ...(p.description ? { description: p.description } : {}),
         };
         if (isRequired) required.push(key);
@@ -430,8 +515,9 @@ function indexOperations(spec: Json): Map<string, Operation> {
 
       let bodyKey: string | undefined;
       let bodyType: 'json' | 'form' | undefined;
+      let encoding: Encoding | undefined;
       let bodyRequired = false;
-      const requestBody = op.requestBody as Json | undefined;
+      const requestBody = op.requestBody ? resolveRef(spec, op.requestBody) : undefined;
       if (requestBody) {
         const content = (requestBody.content ?? {}) as Record<string, Json>;
         const types = Object.keys(content);
@@ -442,8 +528,9 @@ function indexOperations(spec: Json): Map<string, Operation> {
         bodyRequired = requestBody.required === true;
         if (chosen) {
           bodyType = jsonType ? 'json' : 'form';
+          if (!jsonType) encoding = (content[chosen]!.encoding as Encoding | undefined) ?? undefined;
           properties[bodyKey] = {
-            ...((content[chosen]!.schema as Json | undefined) ?? {}),
+            ...((deref(spec, content[chosen]!.schema, budget) as Json | undefined) ?? {}),
             description: (requestBody.description as string | undefined) ?? `request body (${chosen})`,
           };
           if (bodyRequired) required.push(bodyKey);
@@ -456,13 +543,14 @@ function indexOperations(spec: Json): Map<string, Operation> {
       const summary = [op.summary, op.description].filter((s) => typeof s === 'string' && s).join(' — ');
       const tool: DownstreamTool = {
         name,
-        description: `${method.toUpperCase()} ${path}${summary ? ` — ${summary}` : ''}`.slice(0, 1000),
+        description: `${method.toUpperCase()} ${path}${summary ? ` — ${summary}` : ''}`.slice(0, 1000) +
+          (budget.truncated ? ' (input schema truncated: too large to inline)' : ''),
         inputSchema: { type: 'object', properties, ...(required.length ? { required } : {}) },
         // Derived from method semantics; non-safe methods carry no hint, so
         // the pool refuses them unless attested or allow-listed.
         ...(SAFE.has(method) ? { annotations: { readOnlyHint: true } } : {}),
       };
-      ops.set(name, { tool, method, path, params, bodyKey, bodyType, bodyRequired, unsupported });
+      ops.set(name, { tool, method, path, params, bodyKey, bodyType, encoding, bodyRequired, unsupported });
     }
   }
   return ops;

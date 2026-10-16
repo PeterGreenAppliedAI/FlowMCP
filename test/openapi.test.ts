@@ -10,7 +10,7 @@ import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectRoot, RpcClient, spawnServer } from './helpers.js';
-import { OpenApiDownstreamClient } from '../src/openapi.js';
+import { OpenApiDownstreamClient, serialize } from '../src/openapi.js';
 
 const flowsDir = join(projectRoot, 'test/fixtures/openapi-flows');
 const specPath = join(flowsDir, 'pets.openapi.json');
@@ -295,5 +295,129 @@ describe('OpenAPI downstream through FlowMCP', () => {
     const done = await client.request('tools/call', { name: 'pets_create', arguments: { name: 'Bo', confirm: token } });
     expect(text(done)).toBe(`created new${before + 1}`);
     expect(created).toBe(before + 1);
+  });
+});
+
+describe('OpenAPI on real-world spec shapes (2026-10-16 validation against GitHub/Stripe)', () => {
+  let echo: Server;
+  let echoUrl = '';
+  const got: Array<{ query: string; body: string; type?: string }> = [];
+  beforeAll(async () => {
+    echo = createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        got.push({ query: decodeURIComponent(new URL(req.url ?? '/', 'http://x').search), body: decodeURIComponent(body), type: req.headers['content-type'] });
+        res.setHeader('content-type', 'application/json');
+        res.end('{"ok":true}');
+      });
+    });
+    await new Promise<void>((r) => echo.listen(0, '127.0.0.1', r));
+    echoUrl = `http://127.0.0.1:${(echo.address() as { port: number }).port}`;
+  });
+  afterAll(() => new Promise<void>((r) => echo.close(() => r())));
+
+  const stripeLike = {
+    openapi: '3.0.0',
+    servers: [{ url: 'http://placeholder.invalid' }],
+    paths: {
+      '/v1/customers': {
+        get: {
+          operationId: 'GetCustomers',
+          parameters: [
+            { name: 'created', in: 'query', style: 'deepObject', explode: true, schema: { anyOf: [{ type: 'object', properties: { gte: { type: 'integer' } } }, { type: 'integer' }] } },
+            { name: 'expand', in: 'query', style: 'deepObject', explode: true, schema: { type: 'array', items: { type: 'string' } } },
+            { name: 'ids', in: 'query', explode: false, schema: { type: 'array', items: { type: 'string' } } },
+            { name: 'tags', in: 'query', style: 'pipeDelimited', schema: { type: 'array', items: { type: 'string' } } },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['active', 'closed'] } },
+            { name: 'limit', in: 'query', schema: { type: 'integer' } },
+          ],
+          responses: { 200: { description: 'ok' } },
+        },
+        post: {
+          operationId: 'PostCustomers',
+          requestBody: {
+            content: {
+              'application/x-www-form-urlencoded': {
+                schema: { type: 'object', properties: { name: { type: 'string' }, metadata: { type: 'object' }, line_items: { type: 'array' }, expand: { type: 'array' } } },
+                encoding: { metadata: { style: 'deepObject', explode: true }, line_items: { style: 'deepObject', explode: true }, expand: { style: 'deepObject', explode: true } },
+              },
+            },
+          },
+          responses: { 200: { description: 'ok' } },
+        },
+      },
+    },
+  };
+
+  async function stripeAdapter() {
+    const dir = mkdtempSync(join(tmpdir(), 'flowmcp-oas-'));
+    writeFileSync(join(dir, 's.json'), JSON.stringify(stripeLike));
+    const c = new OpenApiDownstreamClient('s', { openapi: 's.json', cwd: dir, baseUrl: echoUrl, headers: {}, query: {} });
+    await c.connect(soon());
+    return c;
+  }
+
+  it('serializes query parameters by their declared style', async () => {
+    const c = await stripeAdapter();
+    const res = await c.callTool('GetCustomers', { created: { gte: 1700000000 }, expand: ['data.sources', 'data.tax'], ids: ['a', 'b'], tags: ['x', 'y'], limit: 3 }, soon());
+    expect(res.isError).toBeUndefined();
+    expect(got.at(-1)!.query).toBe('?created[gte]=1700000000&expand[0]=data.sources&expand[1]=data.tax&ids=a,b&tags=x|y&limit=3');
+  });
+
+  it('serializes nested form bodies by their encoding (never [object Object])', async () => {
+    const c = await stripeAdapter();
+    await c.callTool('PostCustomers', { body: { name: 'Ada', metadata: { plan: 'pro', seats: 3 }, line_items: [{ price: 'p_1', quantity: 2 }], expand: ['sources'] } }, soon());
+    expect(got.at(-1)!.type).toBe('application/x-www-form-urlencoded');
+    expect(got.at(-1)!.body).toBe('name=Ada&metadata[plan]=pro&metadata[seats]=3&line_items[0][price]=p_1&line_items[0][quantity]=2&expand[0]=sources');
+    expect(got.at(-1)!.body).not.toContain('[object Object]');
+  });
+
+  it('rejects values outside a declared enum before sending', async () => {
+    const c = await stripeAdapter();
+    const before = got.length;
+    const res = await c.callTool('GetCustomers', { status: 'bogus' }, soon());
+    expect(res.isError).toBe(true);
+    expect(res.content![0]!.text).toMatch(/'status' must be one of "active", "closed" — got "bogus"/);
+    expect(got.length).toBe(before);
+    expect((await c.callTool('GetCustomers', { status: 'closed' }, soon())).isError).toBeUndefined();
+  });
+
+  it('serialize: form defaults match the OpenAPI table', () => {
+    expect(serialize('id', [3, 4], 'form', true)).toEqual([['id', '3'], ['id', '4']]);
+    expect(serialize('id', [3, 4], 'form', false)).toEqual([['id', '3,4']]);
+    expect(serialize('c', { r: 100, g: 200 }, 'form', true)).toEqual([['r', '100'], ['g', '200']]);
+    expect(serialize('c', { r: 100, g: 200 }, 'form', false)).toEqual([['c', 'r,100,g,200']]);
+  });
+
+  it('loads a densely shared-ref spec without exponential inlining', async () => {
+    // S0 <- S1 <- … <- S30, each schema referencing the previous one TWICE:
+    // no cycle, but naive inlining is 2^30 nodes (Stripe's spec exhausted a
+    // 2GB heap the same way). Referenced from a response AND a request body.
+    const schemas: Record<string, unknown> = { S0: { type: 'string' } };
+    for (let i = 1; i <= 30; i++) {
+      schemas[`S${i}`] = { type: 'object', properties: { a: { $ref: `#/components/schemas/S${i - 1}` }, b: { $ref: `#/components/schemas/S${i - 1}` } } };
+    }
+    const spec = {
+      openapi: '3.0.0',
+      servers: [{ url: echoUrl }],
+      components: { schemas },
+      paths: {
+        '/dense': {
+          get: { operationId: 'getDense', responses: { 200: { description: 'ok', content: { 'application/json': { schema: { $ref: '#/components/schemas/S30' } } } } } },
+          post: { operationId: 'postDense', requestBody: { content: { 'application/json': { schema: { $ref: '#/components/schemas/S30' } } } }, responses: { 200: { description: 'ok' } } },
+        },
+      },
+    };
+    const dir = mkdtempSync(join(tmpdir(), 'flowmcp-oas-'));
+    writeFileSync(join(dir, 'dense.json'), JSON.stringify(spec));
+    const t0 = Date.now();
+    const c = new OpenApiDownstreamClient('d', { openapi: 'dense.json', cwd: dir, headers: {}, query: {} });
+    await c.connect(soon());
+    const tools = Object.fromEntries((await c.listTools()).map((t) => [t.name, t]));
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(tools.getDense!.description).not.toMatch(/truncated/); // responses are never inlined
+    expect(tools.postDense!.description).toMatch(/input schema truncated/);
+    expect(JSON.stringify(tools.postDense!.inputSchema).length).toBeLessThan(500_000);
   });
 });
