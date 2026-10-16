@@ -156,6 +156,14 @@ lists every tool as a declared read or not, and prints a draft entry with
 empty `attestReadOnly`/`allow` lists — nothing beyond the endpoint's own
 declared reads is callable until you review it.
 
+No spec at all? Record the API being used (devtools "Save all as HAR",
+mitmproxy, …) and `flowmcp infer-spec capture.har --out api.json` infers one:
+id-like path segments become parameters, body fields seen in every request
+become required, and **no captured value is ever written** — no header,
+cookie, query value, or body content; auth headers and key-like query
+parameters are reported as configuration to supply with `{{env.X}}`. The
+result is a hypothesis to review, then `discover` it like any other spec.
+
 Sometimes one operation *is* the workflow. `flowmcp promote pets getPet`
 writes it out as an ordinary one-step flow file — required scalar arguments
 become inputs, constants are pinned with `--pin tenant=EMEA`, writes get a
@@ -212,6 +220,7 @@ One entry point for the whole loop (from a clone: `npx tsx src/cli.ts <cmd>`, or
 | `flowmcp compile-graphql <query-log.jsonl> --server <name> --tool <tool>` | compile recurring GraphQL operations into candidate flows |
 | `flowmcp discover <url \| spec-file> [--header 'K: V'] [--name <server>]` | find an endpoint's tools (OpenAPI/Swagger spec, MCP, GraphQL; or `--stdio <cmd…>`) and print a fail-closed `servers.json5` draft |
 | `flowmcp promote <server> <tool> [--input <arg>] [--pin <arg>=<value>]` | write a one-step flow exposing one admitted operation (≤3 scalar inputs; writes confirmation-gated) |
+| `flowmcp infer-spec <capture.har> [--origin <url>] [--out <spec.json>]` | infer an OpenAPI spec from recorded traffic for APIs that publish none — shape only, no captured values |
 
 `author` needs an OpenAI-compatible endpoint via `--gateway` or the `GATEWAY` env var —
 there is no default endpoint or model; any local or hosted model works.

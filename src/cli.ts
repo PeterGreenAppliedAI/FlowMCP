@@ -10,6 +10,7 @@
 //   flowmcp detect   <executions.jsonl> …   nominate flows from execution logs
 //   flowmcp discover <url | spec> …         probe an endpoint, draft a servers.json5 entry
 //   flowmcp promote  <server> <tool> …      put one admitted operation on the surface as a flow
+//   flowmcp infer-spec <capture.har> …      infer an OpenAPI spec from recorded traffic
 //
 // Legacy flag style (`flowmcp --flows x --validate`) still works: no
 // subcommand means serve, and serve reads the same flags it always did.
@@ -35,6 +36,8 @@ const USAGE = `flowmcp — workflows are the tools
                                              find an endpoint's tools, print a fail-closed servers.json5 draft
   flowmcp promote  <server> <tool> [--flows <dir>] [--input <arg>] [--pin <arg>=<value>]
                                              write a one-step flow exposing one admitted operation
+  flowmcp infer-spec <capture.har> [--origin <url>] [--out <spec.json>]
+                                             infer an OpenAPI spec (shape only, no values) from traffic
 
 Flow directory: --flows, or FLOWMCP_FLOWS_DIR, or ./flows.
 Format spec: FORMAT.md · https://github.com/PeterGreenAppliedAI/FlowMCP
@@ -82,6 +85,10 @@ async function main(): Promise<void> {
     case 'promote':
       process.argv.splice(2, 1);
       await (await import('./promote.js')).promoteCli();
+      return;
+    case 'infer-spec':
+      process.argv.splice(2, 1);
+      (await import('./har.js')).inferSpecCli();
       return;
     case 'compile-graphql':
       process.argv.splice(2, 1);

@@ -2,6 +2,38 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-10-16 — any API, not just MCP: adapters behind one interface
+
+**What didn't work:** composition was MCP-only. A plain REST or GraphQL API
+could only be reached through raw `http_request` URLs in each flow — no
+registry, no discovery, no read/write gate beyond GET-vs-POST, and invisible
+to `flowmcp author`. "Wrap any endpoint" was true for MCP servers alone.
+
+**The fix:** new backends are adapters behind `DownstreamClient`, never new
+step kinds — `openapi` (OpenAPI 3.x / Swagger 2.0, JSON or YAML) and
+`graphql` (introspected) transports, so the pool's admission rules,
+attestation, `attestHash` drift pins, two-phase write gate and author
+introspection apply unchanged. Reads are derived, not asserted: safe HTTP
+methods and GraphQL Query fields carry `readOnlyHint`; everything else is a
+write until reviewed. `discover` probes with non-writing requests only and
+drafts an entry with empty `attestReadOnly`/`allow`; `infer-spec` covers
+APIs with no spec. Surfacing tools is per-operation (`promote` writes an
+ordinary flow file), never a whole-server passthrough — the benchmark's raw
+surface scored 10% and tool search did no better — and the server warns
+past a 12-tool surface budget.
+
+**Two gaps caught by tests before commit:** (1) `promote` silently dropped a
+required object argument that had no required fields inside it — the
+generated call would have gone out missing a required argument. Now it
+refuses and asks for `--pin` (test/promote.test.ts, "refuses more than 3
+inputs unless constants are pinned"). (2) `infer-spec` kept any path segment
+that wasn't id-shaped as a literal, so an email in a captured path would
+have been written into the spec. Any segment that isn't a plain word ≤ 32
+chars is now a parameter (test/har.test.ts, "never writes a captured
+value"). Residual, documented limit: a plain-word username in a path
+(`/users/alice`) is indistinguishable from a route word and stays literal —
+the inferred spec is a hypothesis for review, and says so in its info block.
+
 ## 2026-08-03 — a transport review found what green CI wasn't exercising
 
 **What didn't work:** five production paths in the remote transport, none
