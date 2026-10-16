@@ -14,6 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { interpolate } from './interpolate.js';
 import { OpenApiDownstreamClient, type OpenApiTarget } from './openapi.js';
+import { GraphqlDownstreamClient, type GraphqlTarget } from './graphql.js';
 
 // Protocol revisions the hand-rolled sides of this codebase support. The SDK
 // client negotiates its own (current) revision for HTTP downstreams.
@@ -346,9 +347,11 @@ export function createDownstreamClient(
   config:
     | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string>; inheritEnv: boolean; shell: boolean; cwd?: string }
     | { transport: 'http'; url: string; headers: Record<string, string> }
-    | ({ transport: 'openapi' } & OpenApiTarget),
+    | ({ transport: 'openapi' } & OpenApiTarget)
+    | ({ transport: 'graphql'; cwd?: string } & GraphqlTarget),
 ): DownstreamClient {
   if (config.transport === 'openapi') return new OpenApiDownstreamClient(name, config);
+  if (config.transport === 'graphql') return new GraphqlDownstreamClient(name, config);
   return config.transport === 'http'
     ? new HttpDownstreamClient(name, config)
     : new StdioDownstreamClient(name, config);

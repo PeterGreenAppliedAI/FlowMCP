@@ -68,15 +68,26 @@ const openapiServerSchema = z
   })
   .strict();
 
+// A GraphQL endpoint: introspected; Query fields are reads, Mutation fields
+// writes (src/graphql.ts).
+const graphqlServerSchema = z
+  .object({
+    transport: z.literal('graphql'),
+    graphql: z.string().min(1), // endpoint URL; may use {{env.X}}
+    headers: z.record(z.string()).default({}), // values may use {{env.X}} (auth tokens)
+    ...policyFields,
+  })
+  .strict();
+
 const serverEntry = z
   .preprocess(
     (raw) => {
       if (raw && typeof raw === 'object' && !('transport' in raw)) {
-        return { ...raw, transport: 'openapi' in raw ? 'openapi' : 'url' in raw ? 'http' : 'stdio' };
+        return { ...raw, transport: 'openapi' in raw ? 'openapi' : 'graphql' in raw ? 'graphql' : 'url' in raw ? 'http' : 'stdio' };
       }
       return raw;
     },
-    z.discriminatedUnion('transport', [stdioServerSchema, httpServerSchema, openapiServerSchema]),
+    z.discriminatedUnion('transport', [stdioServerSchema, httpServerSchema, openapiServerSchema, graphqlServerSchema]),
   )
   .refine((c) => c.allow.every((t) => !c.attestReadOnly.includes(t)), {
     message: "'allow' and 'attestReadOnly' must be disjoint — a tool is a read or a write, not both",

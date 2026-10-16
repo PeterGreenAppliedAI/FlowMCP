@@ -145,6 +145,10 @@ write until attested or allow-listed):
 }
 ```
 
+GraphQL endpoints work the same way — `crm: { graphql: 'https://…/graphql',
+headers: { Authorization: 'Bearer {{env.CRM_TOKEN}}' }, allow: ['createCustomer'] }`
+introspects the schema; Query fields are reads, Mutation fields are writes.
+
 Then use an `mcp_call` step like any other (REST operations take path/query
 parameters as arguments and the request body as `body`):
 

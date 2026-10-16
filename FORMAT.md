@@ -138,6 +138,19 @@ redirects are followed only within the API's origin, credentials are
 redacted from errors, and auth headers are sent to the spec host only when it
 is the API's own origin.
 
+**GraphQL** (`graphql`, `headers?`) wraps a GraphQL endpoint. On connect the
+schema is introspected: every root Query field becomes a read tool
+(`readOnlyHint`) and every root Mutation field a write tool, refused unless
+attested or allow-listed (subscriptions are not exposed). Field arguments are
+the tool's arguments (enums and input objects map to JSON Schema). The
+operation document is generated, never supplied by the caller: arguments
+travel as typed variables, and the selection set defaults to scalar fields
+plus nested objects two levels deep, skipping fields that need arguments.
+Composite-returning tools accept an optional `select` (field names and
+braces only — arguments, aliases, fragments and directives are rejected).
+GraphQL `errors[]` count as failures even on HTTP 200; endpoints with
+introspection disabled refuse at connect.
+
 **Migration note (v0.6):** configs written before v0.6 relied on process-cwd
 resolution; every relative path in an existing `servers.json5` must be
 re-anchored to the file's own directory. The runtime warns at startup when a

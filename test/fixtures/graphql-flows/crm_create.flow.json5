@@ -1,0 +1,8 @@
+{
+  name: 'crm_create',
+  description: 'WHEN TO USE: test — allow-listed GraphQL mutation.',
+  input: { name: { type: 'string', description: 'Customer name', required: true } },
+  steps: [{ id: 'c', kind: 'mcp_call', server: 'crm', tool: 'createCustomer', args: { input: { name: '{{input.name}}' } } }],
+  output: 'created {{steps.c.id}}',
+  proposal: 'About to create customer {{input.name}}.',
+}

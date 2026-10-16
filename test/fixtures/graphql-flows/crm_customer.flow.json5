@@ -1,0 +1,7 @@
+{
+  name: 'crm_customer',
+  description: 'WHEN TO USE: test — look up a customer through a GraphQL API.',
+  input: { id: { type: 'string', description: 'Customer id', required: true } },
+  steps: [{ id: 'c', kind: 'mcp_call', server: 'crm', tool: 'customer', args: { id: '{{input.id}}' } }],
+  output: '{{steps.c.name}} in {{steps.c.address.city}}',
+}

@@ -1,0 +1,10 @@
+// A GraphQL endpoint (no MCP server) wrapped by introspection. Query fields
+// are reads; createCustomer is an allow-listed write; deleteCustomer is
+// neither and is refused.
+{
+  crm: {
+    graphql: '{{env.CRM_GRAPHQL_URL}}',
+    headers: { Authorization: 'Bearer {{env.CRM_TOKEN}}' },
+    allow: ['createCustomer'],
+  },
+}

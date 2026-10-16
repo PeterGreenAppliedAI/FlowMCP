@@ -1,0 +1,7 @@
+{
+  name: 'crm_delete',
+  description: 'WHEN TO USE: test — unlisted mutation must be refused.',
+  input: {},
+  steps: [{ id: 'd', kind: 'mcp_call', server: 'crm', tool: 'deleteCustomer', args: { id: 'c1' } }],
+  output: '{{steps.d}}',
+}
