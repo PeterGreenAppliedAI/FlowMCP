@@ -2,6 +2,58 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-10-16 — real-world validation: GitHub REST + GraphQL, Stripe, HN
+
+**What didn't work:** 0.10.0 was tested only against fixtures written
+alongside the code. Pointed at real targets, it broke in ten ways:
+- **Stripe's 8 MB spec crashed the process** (2 GB heap exhausted in 30 s).
+  Every path item was fully inlined, responses included, and Stripe's
+  densely shared refs expand exponentially without ever forming a cycle, so
+  the cycle guard never fired. In `serve`, one such spec would take the
+  whole server down.
+- **Stripe's nested input was unsendable:** deepObject query parameters were
+  rejected, arrays went out as repeated keys, and nested form values were sent
+  as `[object Object]`.
+- **Enum-constrained parameters weren't checked.** GitHub silently ignored
+  `sort=bogus`.
+- **`promote` output wasn't model-ready:** descriptions cut mid-word with raw
+  markdown links; the "One of: …" allowed-values note appended and then
+  truncated away; raw payloads (3 repos = 18 KB) cut mid-JSON by the 8K cap.
+- **GraphQL:** one credential-gated field (`viewer.email`) failed the whole
+  default query; union fields were skipped (`search` returned only cursors).
+- **HAR:** file-like segments (`topstories.json`) became parameters, merging
+  three endpoints and dropping `.json` from `/item/{id}`. Every call built
+  from that spec hit a redirect. Plain-word usernames (`/user/pg`) were
+  written into the spec.
+
+**Why tests missed them:** each fixture encoded the author's model of an
+API, not an API. None had shared refs at scale, deepObject encodings, enums
+on query parameters, scope-gated fields, unions, or `.json` paths. Real
+specs are the only source of real shapes.
+
+**The fix:**
+- **OpenAPI:** only input schemas are inlined, under a per-operation node
+  budget; parameters and form bodies follow OpenAPI serialization styles;
+  allowed values are checked before sending.
+- **`promote`:** `tidy()` cleans and shortens descriptions without cutting
+  words, allowed-value lists get their space first, and `--pick` generates
+  projection steps.
+- **GraphQL:** selections are trees end to end. Errors are mapped to fields
+  by `path` or `locations`, those fields dropped, and the query retried and
+  remembered. Mutations are retried only when rejected before execution
+  (`data` absent); an executed mutation is never retried.
+- **HAR:** extensions survive, and a plain-word position that took several
+  values across same-shaped responses becomes a parameter.
+
+Each regression test was confirmed to fail on the pre-fix code; the Stripe
+one reproduces the out-of-memory crash. Live results after the fixes:
+- Stripe loads in 1.0 s / 175 MB (612 operations); GitHub REST in 1.5 s
+  (1,242).
+- Promoted GitHub flows return valid JSON 7–20× smaller.
+- GitHub GraphQL `viewer` works on a token without `user:email`.
+- All four inferred HN operations work, including a value never seen in
+  the capture.
+
 ## 2026-10-16 — external review of 6bbcb87: four findings, all reproduced
 
 **What didn't work:**

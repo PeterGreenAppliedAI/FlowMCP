@@ -147,7 +147,11 @@ write until attested or allow-listed):
 
 GraphQL endpoints work the same way — `crm: { graphql: 'https://…/graphql',
 headers: { Authorization: 'Bearer {{env.CRM_TOKEN}}' }, allow: ['createCustomer'] }`
-introspects the schema; Query fields are reads, Mutation fields are writes.
+introspects the schema; Query fields are reads, Mutation fields are writes. The
+default selection skips fields a credential can't read (the server's errors are
+mapped back to the exact field and the call retried once), and `select` takes field
+names plus `... on Type { }` for unions — parsed and schema-checked, never pasted
+into the query.
 
 Don't know what an endpoint speaks? `flowmcp discover https://api.example.com
 --header 'Authorization: Bearer {{env.TOKEN}}'` probes it with non-writing
@@ -162,13 +166,19 @@ id-like path segments become parameters, body fields seen in every request
 become required, and **no captured value is ever written** — no header,
 cookie, query value, or body content; auth headers and key-like query
 parameters are reported as configuration to supply with `{{env.X}}`. The
-result is a hypothesis to review, then `discover` it like any other spec.
+result is a hypothesis to review, then `discover` it like any other spec. File
+extensions survive (`{itemId}.json`), and a path position that took several values
+across same-shaped responses becomes a parameter, so usernames like `/user/pg` aren't
+written into the spec.
 
 Sometimes one operation *is* the workflow. `flowmcp promote pets getPet`
 writes it out as an ordinary one-step flow file — required scalar arguments
 become inputs, constants are pinned with `--pin tenant=EMEA`, writes get a
 confirmation proposal, and a tool that `servers.json5` does not already admit
-is refused. Promotion is per operation, never a whole-server passthrough: the
+is refused. Real API payloads are mostly noise, so `--pick` keeps what the model
+needs: `flowmcp promote github search_repos --pick
+'total_count,items[].full_name,items[].stargazers_count'` turned an 18 KB search
+result into 927 bytes. Promotion is per operation, never a whole-server passthrough: the
 server warns when the served surface passes 12 tools (`FLOWMCP_TOOL_BUDGET`),
 because the benchmark showed small models degrading as the surface grows.
 
