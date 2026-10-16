@@ -9,12 +9,14 @@
 // are annotated readOnlyHint; everything else is a write until the operator
 // attests it (e.g. a POST /search) or allow-lists it.
 //
-// Scope (fail-closed): OpenAPI 3.x JSON only; local $refs only; JSON and
-// form-urlencoded request bodies only. Anything else refuses loudly.
+// Scope (fail-closed): OpenAPI 3.x and Swagger 2.0 (normalized to 3.x on
+// load), JSON or YAML; local $refs only; JSON and form-urlencoded request
+// bodies only. Anything else refuses loudly.
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import JSON5 from 'json5';
+import { parse as parseYaml } from 'yaml';
 import { interpolate } from './interpolate.js';
 import type { DownstreamClient, DownstreamTool, McpResult } from './downstream.js';
 
@@ -87,7 +89,10 @@ export class OpenApiDownstreamClient implements DownstreamClient {
       throw new Error(`server '${this.name}': ${this.redact(e instanceof Error ? e.message : String(e))}`);
     }
     if (typeof spec.swagger === 'string') {
-      throw new Error(`server '${this.name}': Swagger ${spec.swagger} specs are not supported — convert to OpenAPI 3.x`);
+      if (spec.swagger !== '2.0') {
+        throw new Error(`server '${this.name}': Swagger ${spec.swagger} specs are not supported — use 2.0 or OpenAPI 3.x`);
+      }
+      spec = fromSwagger2(spec);
     }
     if (typeof spec.openapi !== 'string' || !spec.openapi.startsWith('3.')) {
       throw new Error(`server '${this.name}': not an OpenAPI 3.x document (missing or unsupported 'openapi' version)`);
@@ -134,13 +139,7 @@ export class OpenApiDownstreamClient implements DownstreamClient {
       text = await readFile(resolve(this.target.cwd ?? process.cwd(), location), 'utf8');
     }
     if (text.length > MAX_SPEC_BYTES) throw new Error(`spec exceeds ${MAX_SPEC_BYTES} bytes`);
-    try {
-      const parsed = JSON5.parse(text) as unknown;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Json;
-    } catch {
-      // fall through
-    }
-    throw new Error('spec is not a JSON document (YAML specs are not supported yet — convert to JSON)');
+    return parseSpecText(text);
   }
 
   async listTools(): Promise<DownstreamTool[]> {
@@ -258,6 +257,75 @@ export class OpenApiDownstreamClient implements DownstreamClient {
     this.ops.clear();
     this.base = undefined;
   }
+}
+
+/** Parse a spec document: JSON first, then YAML. Must be a mapping. */
+export function parseSpecText(text: string): Json {
+  let parsed: unknown;
+  try {
+    parsed = JSON5.parse(text);
+  } catch {
+    try {
+      // maxAliasCount bounds YAML alias expansion ("billion laughs")
+      parsed = parseYaml(text, { maxAliasCount: 100 });
+    } catch (e) {
+      throw new Error(`spec is neither JSON nor YAML: ${e instanceof Error ? e.message.split('\n')[0] : e}`);
+    }
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Json;
+  throw new Error('spec is not a JSON/YAML mapping');
+}
+
+// Swagger 2.0 -> the OpenAPI 3.x subset this adapter reads: servers from
+// schemes/host/basePath, body/formData parameters -> requestBody, flat
+// parameter type fields -> schema. '#/definitions/...' refs keep working —
+// deref follows any local JSON pointer.
+export function fromSwagger2(spec: Json): Json {
+  const scheme = ((spec.schemes as string[] | undefined) ?? ['https']).includes('https') ? 'https' : ((spec.schemes as string[])[0] ?? 'https');
+  const servers = typeof spec.host === 'string' ? [{ url: `${scheme}://${spec.host}${(spec.basePath as string | undefined) ?? ''}` }]
+    : typeof spec.basePath === 'string' ? [{ url: spec.basePath }] : [];
+  const globalConsumes = (spec.consumes as string[] | undefined) ?? ['application/json'];
+  const convertParams = (params: Json[] | undefined, consumes: string[]) => {
+    const out: Json[] = [];
+    let requestBody: Json | undefined;
+    const form: { properties: Json; required: string[] } = { properties: {}, required: [] };
+    for (const raw of params ?? []) {
+      const p = deref(spec, raw) as Json;
+      if (p.in === 'body') {
+        requestBody = { required: p.required === true, description: p.description, content: { 'application/json': { schema: p.schema ?? {} } } };
+      } else if (p.in === 'formData') {
+        const { name, in: _in, required, description, ...schema } = p;
+        if (schema.type === 'file') schema.format = 'binary';
+        form.properties[String(name)] = { ...schema, ...(description ? { description } : {}) };
+        if (required) form.required.push(String(name));
+      } else {
+        const { name, in: where, required, description, ...schema } = p;
+        out.push({ name, in: where, required, description, schema });
+      }
+    }
+    if (Object.keys(form.properties).length) {
+      const hasFile = Object.values(form.properties).some((v) => (v as Json).format === 'binary');
+      const type = hasFile || consumes.some((c) => c.startsWith('multipart/')) ? 'multipart/form-data' : 'application/x-www-form-urlencoded';
+      requestBody = { required: form.required.length > 0, content: { [type]: { schema: { type: 'object', properties: form.properties, ...(form.required.length ? { required: form.required } : {}) } } } };
+    }
+    return { params: out, requestBody };
+  };
+  const paths: Json = {};
+  for (const [path, rawItem] of Object.entries((spec.paths ?? {}) as Record<string, Json>)) {
+    const item = deref(spec, rawItem) as Json;
+    const next: Json = {};
+    if (item.parameters) next.parameters = convertParams(item.parameters as Json[], globalConsumes).params;
+    for (const method of METHODS) {
+      const op = item[method] as Json | undefined;
+      if (!op) continue;
+      const { params, requestBody } = convertParams(op.parameters as Json[] | undefined, (op.consumes as string[] | undefined) ?? globalConsumes);
+      // path-level body/formData would be lost by the split above; fold it in
+      const shared = item.parameters ? convertParams(item.parameters as Json[], globalConsumes).requestBody : undefined;
+      next[method] = { ...op, parameters: params, ...((requestBody ?? shared) ? { requestBody: requestBody ?? shared } : {}) };
+    }
+    paths[path] = next;
+  }
+  return { ...spec, openapi: '3.0.0', swagger: undefined, servers, paths };
 }
 
 function errorResult(message: string): McpResult {

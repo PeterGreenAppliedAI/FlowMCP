@@ -159,10 +159,48 @@ describe('OpenAPI adapter', () => {
     expect((await c.callTool('getPet', {}, soon())).content![0]!.text).toMatch(/missing required parameter 'petId'/);
 
     const dir = mkdtempSync(join(tmpdir(), 'flowmcp-oas-'));
-    writeFileSync(join(dir, 'v2.json'), JSON.stringify({ swagger: '2.0', paths: {} }));
-    await expect(adapter({ openapi: 'v2.json', cwd: dir }).connect(soon())).rejects.toThrow(/Swagger 2.0/);
+    writeFileSync(join(dir, 'v1.json'), JSON.stringify({ swagger: '1.2', paths: {} }));
+    await expect(adapter({ openapi: 'v1.json', cwd: dir }).connect(soon())).rejects.toThrow(/Swagger 1.2/);
+    writeFileSync(join(dir, 'junk.yaml'), 'just a string');
+    await expect(adapter({ openapi: 'junk.yaml', cwd: dir }).connect(soon())).rejects.toThrow(/mapping/);
     writeFileSync(join(dir, 'noserver.json'), JSON.stringify({ openapi: '3.1.0', paths: {} }));
     await expect(adapter({ openapi: 'noserver.json', cwd: dir, baseUrl: undefined }).connect(soon())).rejects.toThrow(/baseUrl/);
+  });
+
+  it('reads a Swagger 2.0 spec written in YAML, normalized to the same tools', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flowmcp-oas-'));
+    const host = new URL(apiUrl).host;
+    writeFileSync(join(dir, 'pets.yaml'), [
+      'swagger: "2.0"',
+      `host: "${host}"`,
+      'basePath: /api',
+      'schemes: [http]',
+      'paths:',
+      '  /pets:',
+      '    get:',
+      '      operationId: listPets',
+      '      parameters:',
+      '        - { name: limit, in: query, type: integer }',
+      '  /pets/search:',
+      '    post:',
+      '      operationId: searchPets',
+      '      parameters:',
+      '        - { name: payload, in: body, required: true, schema: { $ref: "#/definitions/Query" } }',
+      '  /pets/{petId}:',
+      '    parameters:',
+      '      - { name: petId, in: path, required: true, type: string }',
+      '    get: { operationId: getPet }',
+      'definitions:',
+      '  Query: { type: object, properties: { q: { type: string } } }',
+    ].join('\n'));
+    const c = adapter({ openapi: 'pets.yaml', cwd: dir, baseUrl: undefined });
+    await c.connect(soon());
+    const by = Object.fromEntries((await c.listTools()).map((t) => [t.name, t]));
+    expect(by.listPets!.annotations?.readOnlyHint).toBe(true);
+    expect(by.searchPets!.inputSchema).toMatchObject({ required: ['body'], properties: { body: { properties: { q: { type: 'string' } } } } });
+    expect((await c.callTool('listPets', { limit: 2 }, soon())).structuredContent).toMatchObject({ count: 2 });
+    expect((await c.callTool('searchPets', { body: { q: 'kit' } }, soon())).structuredContent).toEqual({ matches: ['match:kit'] });
+    expect((await c.callTool('getPet', { petId: 'p1' }, soon())).structuredContent).toEqual({ id: 'p1', name: 'Rex' });
   });
 
   it('does not send credentials when fetching a spec from another origin', async () => {

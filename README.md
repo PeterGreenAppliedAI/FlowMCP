@@ -129,7 +129,7 @@ MCP — tokens interpolated from env):
 (`shell` defaults to false. On Windows, `.cmd` shims like `npx` need `shell: true` — or point `command` directly at a Node entry point. `servers.json5` is operator-trusted config, so the shell opt-in is a portability knob, not an injection surface. Relative paths in `command`/`args` resolve against the directory containing `servers.json5` — the config works no matter where the flowmcp process was started from.)
 
 Plain REST APIs need no MCP server at all — point an entry at the API's
-OpenAPI 3.x spec and every operation becomes a callable tool under the same
+OpenAPI 3.x or Swagger 2.0 spec (JSON or YAML) and every operation becomes a callable tool under the same
 rules (GET reads are admitted by method semantics; any other method is a
 write until attested or allow-listed):
 

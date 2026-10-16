@@ -130,8 +130,9 @@ Reads are **derived from HTTP method semantics**: GET/HEAD/OPTIONS carry
 `readOnlyHint`; every other method is a write until attested (e.g. a POST
 search endpoint) or allow-listed. `baseUrl` overrides the spec's
 `servers[0].url`; `headers`/`query` carry auth and may interpolate
-`{{env.X}}`. Fail-closed scope: OpenAPI 3.x JSON only (Swagger 2.0 and YAML
-refuse at connect), local `$ref`s only, JSON and form-urlencoded bodies only.
+`{{env.X}}`. Fail-closed scope: OpenAPI 3.x or Swagger 2.0 (normalized to 3.x on
+load), in JSON or YAML; local `$ref`s only; JSON and form-urlencoded bodies
+only — multipart operations are listed but refuse to call.
 Requests are confined to the base URL (dot-segment path parameters refuse),
 redirects are followed only within the API's origin, credentials are
 redacted from errors, and auth headers are sent to the spec host only when it
