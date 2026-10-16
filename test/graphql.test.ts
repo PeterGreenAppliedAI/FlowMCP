@@ -30,7 +30,7 @@ describe('GraphQL adapter', () => {
     const c = adapter();
     await c.connect(soon());
     const by = Object.fromEntries((await c.listTools()).map((t) => [t.name, t]));
-    expect(Object.keys(by).sort()).toEqual(['createCustomer', 'customer', 'customers', 'deleteCustomer', 'resetAll', 'version']);
+    expect(Object.keys(by).sort()).toEqual(['createCustomer', 'customer', 'customers', 'deleteCustomer', 'resetAll', 'search', 'version']);
     expect(by.customer!.annotations?.readOnlyHint).toBe(true);
     expect(by.createCustomer!.annotations).toBeUndefined();
     expect(by.customer!.inputSchema).toMatchObject({ required: ['id'], properties: { id: { type: 'string' }, select: { type: 'string' } } });
@@ -50,6 +50,7 @@ describe('GraphQL adapter', () => {
     const res = await c.callTool('customer', { id: 'c1' }, soon());
     expect(res.structuredContent).toMatchObject({ id: 'c1', name: 'Acme', address: { city: 'Lisbon' } });
     const doc = api.documents.at(-1)!;
+    // the two credential-gated fields were attempted, attributed, and dropped
     expect(doc.query).toBe('query FlowMcp($id: ID!) { customer(id: $id) { id name status address { city } } }');
     expect(doc.variables).toEqual({ id: 'c1' });
   });
@@ -69,7 +70,7 @@ describe('GraphQL adapter', () => {
     await c.callTool('customer', { id: 'c1', select: 'name address { country { code } }' }, soon());
     expect(api.documents.at(-1)!.query).toContain('customer(id: $id) { name address { country { code } } }');
     const before = api.documents.length;
-    for (const select of ['name orders(first: 100) { id }', '...on Customer { id }', 'name @include(if: true)', 'a: name', '{ name']) {
+    for (const select of ['name orders(first: 100) { id }', '... { id }', '...on', 'name @include(if: true)', 'a: name', '{ name', '.. on Customer { id }']) {
       const res = await c.callTool('customer', { id: 'c1', select }, soon());
       expect(res.isError, select).toBe(true);
     }
@@ -86,9 +87,10 @@ describe('GraphQL adapter', () => {
       if (select === '') continue; // empty = default selection, sent normally
       expect(res.isError, select).toBe(true);
     }
-    // only the '' call reached the server, as a single-root document
-    expect(api.documents.length).toBe(docs + 1);
-    expect(api.documents.at(-1)!.query).toBe('mutation FlowMcp($input: NewCustomer!) { createCustomer(input: $input) { id name status address { city } } }');
+    // only the '' call reached the server: rejected pre-execution for a gated
+    // field, retried without it — every document a single root field
+    expect(api.documents.length).toBe(docs + 2);
+    expect(api.documents.at(-1)!.query).toBe('mutation FlowMcp($input: NewCustomer!) { createCustomer(input: $input) { id name status address { city } internalScore } }');
     expect(api.mutations()).toBe(before + 1);
   });
 
@@ -109,6 +111,75 @@ describe('GraphQL adapter', () => {
     const ok = await c.callTool('customer', { id: 'c1', select: '{ __typename, name, address { country { code } } }' }, soon());
     expect(ok.isError).toBeUndefined();
     expect(api.documents.at(-1)!.query).toContain('customer(id: $id) { __typename name address { country { code } } }');
+  });
+
+  it('drops fields the credential cannot read — by locations or by path — and remembers', async () => {
+    const c = adapter();
+    await c.connect(soon());
+    const before = api.documents.length;
+    const res = await c.callTool('customer', { id: 'c1' }, soon());
+    expect(res.isError).toBeUndefined();
+    expect(res.structuredContent).toMatchObject({ id: 'c1', name: 'Acme' });
+    const sent = api.documents.slice(before).map((d) => d.query);
+    expect(sent).toEqual([
+      'query FlowMcp($id: ID!) { customer(id: $id) { id name status address { city } secretNote internalScore } }', // locations error
+      'query FlowMcp($id: ID!) { customer(id: $id) { id name status address { city } internalScore } }', // path error
+      'query FlowMcp($id: ID!) { customer(id: $id) { id name status address { city } } }',
+    ]);
+    // the pruned selection is remembered: one request next time
+    await c.callTool('customer', { id: 'c2' }, soon());
+    expect(api.documents.length).toBe(before + 4);
+  });
+
+  it('never drops fields the caller explicitly selected', async () => {
+    const c = adapter();
+    await c.connect(soon());
+    const docs = api.documents.length;
+    const explicit = await c.callTool('customer', { id: 'c1', select: 'name secretNote' }, soon());
+    expect(explicit.isError).toBe(true);
+    expect(explicit.content![0]!.text).toMatch(/notes scope/);
+    expect(api.documents.length).toBe(docs + 1);
+  });
+
+  it('never retries a mutation that executed', async () => {
+    const c = adapter();
+    await c.connect(soon());
+    const select = 'id name';
+    // executed with a partial-result error: the write is reported done, once
+    let docs = api.documents.length;
+    let before = api.mutations();
+    const partial = await c.callTool('createCustomer', { input: { name: 'PARTIAL' }, select }, soon());
+    expect(partial.isError).toBeUndefined();
+    expect(partial.structuredContent).toEqual({ id: 'cP', name: 'PARTIAL' });
+    expect([api.documents.length - docs, api.mutations() - before]).toEqual([1, 1]);
+    // executed and failed: an error that says it may have been applied, once
+    docs = api.documents.length;
+    before = api.mutations();
+    const failed = await c.callTool('createCustomer', { input: { name: 'FAILED' } }, soon());
+    expect(failed.isError).toBe(true);
+    expect(failed.content![0]!.text).toMatch(/may have been applied — check before retrying/);
+    // (the default selection's gated field cost one PRE-execution rejection first)
+    expect(api.mutations() - before).toBe(1);
+    expect(api.documents.slice(docs).filter((d) => d.variables && (d.variables.input as { name?: string })?.name === 'FAILED').length).toBe(2);
+  });
+
+  it('selects unions through validated inline fragments', async () => {
+    const c = adapter();
+    await c.connect(soon());
+    const res = await c.callTool('search', { q: 'a' }, soon());
+    expect(res.isError).toBeUndefined();
+    expect(api.documents.at(-1)!.query).toBe(
+      'query FlowMcp($q: String!) { search(q: $q) { __typename ... on Customer { id name status } ... on Order { id total } } }',
+    );
+    await c.callTool('search', { q: 'a', select: '__typename ... on Order { total }' }, soon());
+    expect(api.documents.at(-1)!.query).toContain('search(q: $q) { __typename ... on Order { total } }');
+    for (const [select, err] of [
+      ['... on Address { city }', /not a possible type of SearchResult/],
+      ['id', /SearchResult is a union/],
+      ['... on Order { name }', /'name' is not a field of Order/],
+    ] as const) {
+      expect((await c.callTool('search', { q: 'a', select }, soon())).content![0]!.text, select).toMatch(err);
+    }
   });
 
   it('treats GraphQL errors as failures and redacts reflected credentials', async () => {

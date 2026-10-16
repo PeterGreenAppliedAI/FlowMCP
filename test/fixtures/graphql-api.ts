@@ -22,6 +22,7 @@ export const SCHEMA = {
       field('customer', obj('Customer'), [arg('id', nonNull(scalar('ID')))], 'One customer by id'),
       field('customers', nonNull(list(nonNull(obj('Customer')))), [arg('limit', scalar('Int'), '10'), arg('status', named('ENUM', 'Status'))]),
       field('version', scalar('String')),
+      field('search', list(named('UNION', 'SearchResult')), [arg('q', nonNull(scalar('String')))]),
     ] },
     { kind: 'OBJECT', name: 'Mutation', fields: [
       field('createCustomer', obj('Customer'), [arg('input', nonNull(named('INPUT_OBJECT', 'NewCustomer')))]),
@@ -34,10 +35,14 @@ export const SCHEMA = {
       field('status', named('ENUM', 'Status')),
       field('address', obj('Address')),
       field('orders', list(obj('Order')), [arg('first', nonNull(scalar('Int')))]),
+      // credential-gated fields, in both real-world error shapes:
+      field('secretNote', scalar('String')), // GitHub-style: errors[].locations only, no data
+      field('internalScore', scalar('Int')), // spec-style: errors[].path + partial data
     ] },
     { kind: 'OBJECT', name: 'Address', fields: [field('city', scalar('String')), field('country', obj('Country'))] },
     { kind: 'OBJECT', name: 'Country', fields: [field('code', scalar('String'))] },
-    { kind: 'OBJECT', name: 'Order', fields: [field('id', scalar('ID'))] },
+    { kind: 'OBJECT', name: 'Order', fields: [field('id', scalar('ID')), field('total', scalar('Int'))] },
+    { kind: 'UNION', name: 'SearchResult', possibleTypes: [{ name: 'Customer' }, { name: 'Order' }] },
     { kind: 'ENUM', name: 'Status', enumValues: [{ name: 'ACTIVE' }, { name: 'CLOSED' }] },
     { kind: 'INPUT_OBJECT', name: 'NewCustomer', inputFields: [
       { name: 'name', description: null, defaultValue: null, type: nonNull(scalar('String')) },
@@ -88,6 +93,13 @@ export async function startGraphqlApi(token: string, opts: { introspection?: boo
       }
       documents.push({ query, variables });
       const root = /^(?:query|mutation)\s+\w+[^{]*\{\s*(\w+)/.exec(query)?.[1];
+      const gated = query.indexOf('secretNote');
+      if (gated !== -1) {
+        return send(200, { errors: [{ type: 'INSUFFICIENT_SCOPES', locations: [{ line: 1, column: gated + 1 }], message: "The 'secretNote' field requires the notes scope" }] });
+      }
+      if (query.includes('internalScore') && root && query.startsWith('query')) {
+        return send(200, { data: { [root]: null }, errors: [{ message: 'not authorized', path: [root, 'internalScore'] }] });
+      }
       switch (root) {
         case 'customer': {
           const c = CUSTOMERS.find((x) => x.id === variables?.id);
@@ -100,7 +112,11 @@ export async function startGraphqlApi(token: string, opts: { introspection?: boo
           return send(200, { data: { customers: filtered.slice(0, Number(variables?.limit ?? 10)) } });
         }
         case 'version': return send(200, { data: { version: '1.2.3' } });
+        case 'search': return send(200, { data: { search: [{ __typename: 'Customer', id: 'c1', name: 'Acme' }, { __typename: 'Order', id: 'o1', total: 5 }] } });
         case 'createCustomer': {
+          const name = (variables?.input as { name?: string } | undefined)?.name;
+          if (name === 'FAILED') { mutations++; return send(200, { data: { createCustomer: null }, errors: [{ message: 'downstream timeout', path: ['createCustomer'] }] }); }
+          if (name === 'PARTIAL') { mutations++; return send(200, { data: { createCustomer: { id: 'cP', name } }, errors: [{ message: 'not authorized', path: ['createCustomer', 'address'] }] }); }
           mutations++;
           if (/\bresetAll\b/.test(query)) mutations += 100; // an injected sibling would execute too
           const input = variables?.input as { name: string };
