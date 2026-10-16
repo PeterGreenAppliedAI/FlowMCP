@@ -118,3 +118,52 @@ describe('infer-spec', () => {
 });
 
 type Json = Record<string, unknown>;
+
+describe('infer-spec on real-world path shapes (2026-10-16, HN Firebase API)', () => {
+  const entry = (url: string, body: unknown) => ({
+    request: { method: 'GET', url },
+    response: { status: 200, content: { mimeType: 'application/json; charset=utf-8', text: JSON.stringify(body) } },
+  });
+  const user = (id: string) => ({ about: 'x', created: 1, id, karma: 2, submitted: [1, 2] });
+  const capture = {
+    log: {
+      entries: [
+        entry('https://hn.example/v0/topstories.json', [1, 2, 3]),
+        entry('https://hn.example/v0/newstories.json', [4, 5]),
+        entry('https://hn.example/v0/maxitem.json', 50122785),
+        entry('https://hn.example/v0/item/8863.json', { id: 8863, by: 'dhouston', title: 'Dropbox' }),
+        entry('https://hn.example/v0/item/121003.json', { id: 121003, by: 'tel', title: 'Ask HN' }),
+        entry('https://hn.example/v0/user/pg.json', user('pg')),
+        entry('https://hn.example/v0/user/dang.json', user('dang')),
+        // same position, DIFFERENT record shapes: two endpoints, not one
+        entry('https://hn.example/api/users', [{ id: 1, email: 'e', name: 'n' }]),
+        entry('https://hn.example/api/orders', [{ sku: 's', total: 3, currency: 'EUR' }]),
+      ],
+    },
+  };
+
+  it('keeps file extensions: route words stay literal, ids become {param}.ext', () => {
+    const paths = Object.keys(inferSpec(capture).spec.paths as Json).sort();
+    expect(paths).toEqual([
+      '/api/orders', '/api/users',
+      '/v0/item/{itemId}.json', '/v0/maxitem.json', '/v0/user/{userId}.json', '/v0/{v0Id}.json',
+    ]);
+  });
+
+  it('templates a plain-word position that varied across same-shaped responses — usernames never reach the spec', () => {
+    const { spec, report } = inferSpec(capture);
+    const text = JSON.stringify(spec);
+    for (const v of ['/pg', '/dang', 'pg.json', 'dang.json', 'topstories', 'newstories']) expect(text).not.toContain(v);
+    expect(report.merged).toEqual(expect.arrayContaining([
+      { template: '/v0/user/{userId}.json', distinctValues: 2 },
+      { template: '/v0/{v0Id}.json', distinctValues: 2 },
+    ]));
+    // maxitem returns a number, not an id list: it is NOT folded in
+    expect(report.merged.some((m) => m.distinctValues > 2)).toBe(false);
+  });
+
+  it('names lookups by their parameter even with an extension', () => {
+    const ids = Object.values(inferSpec(capture).spec.paths as Record<string, Record<string, { operationId: string }>>).map((p) => p.get!.operationId).sort();
+    expect(ids).toEqual(['get_api_orders', 'get_api_users', 'get_v0_by_v0Id', 'get_v0_item_by_itemId', 'get_v0_maxitem', 'get_v0_user_by_userId']);
+  });
+});
