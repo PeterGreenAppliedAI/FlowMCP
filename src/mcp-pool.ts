@@ -55,15 +55,28 @@ const httpServerSchema = z
   })
   .strict();
 
+// A plain REST API described by an OpenAPI 3.x spec: every operation is a
+// tool, governed by the same policy fields as an MCP server (src/openapi.ts).
+const openapiServerSchema = z
+  .object({
+    transport: z.literal('openapi'),
+    openapi: z.string().min(1), // spec URL or path (relative to servers.json5); may use {{env.X}}
+    baseUrl: z.string().min(1).optional(), // overrides the spec's servers[0].url
+    headers: z.record(z.string()).default({}), // values may use {{env.X}} (auth tokens)
+    query: z.record(z.string()).default({}), // API-key-in-query auth; values may use {{env.X}}
+    ...policyFields,
+  })
+  .strict();
+
 const serverEntry = z
   .preprocess(
     (raw) => {
       if (raw && typeof raw === 'object' && !('transport' in raw)) {
-        return { ...raw, transport: 'url' in raw ? 'http' : 'stdio' };
+        return { ...raw, transport: 'openapi' in raw ? 'openapi' : 'url' in raw ? 'http' : 'stdio' };
       }
       return raw;
     },
-    z.discriminatedUnion('transport', [stdioServerSchema, httpServerSchema]),
+    z.discriminatedUnion('transport', [stdioServerSchema, httpServerSchema, openapiServerSchema]),
   )
   .refine((c) => c.allow.every((t) => !c.attestReadOnly.includes(t)), {
     message: "'allow' and 'attestReadOnly' must be disjoint — a tool is a read or a write, not both",

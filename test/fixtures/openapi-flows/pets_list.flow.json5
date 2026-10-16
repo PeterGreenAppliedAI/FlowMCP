@@ -1,0 +1,11 @@
+{
+  name: 'pets_list',
+  description: 'WHEN TO USE: test — list pets through an OpenAPI-wrapped REST API.',
+  input: { limit: { type: 'number', description: 'How many pets', default: 2 } },
+  steps: [
+    { id: 'pets', kind: 'mcp_call', server: 'pets', tool: 'listPets', args: { limit: '{{input.limit}}' } },
+    { id: 'first', kind: 'mcp_call', server: 'pets', tool: 'getPet', args: { petId: '{{steps.pets.pets[0].id}}' } },
+    { id: 'render', kind: 'template', template: '{{steps.pets.count}} pets; first is {{steps.first.name}}' },
+  ],
+  output: '{{steps.render}}',
+}

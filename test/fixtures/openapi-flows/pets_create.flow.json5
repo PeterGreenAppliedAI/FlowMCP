@@ -1,0 +1,8 @@
+{
+  name: 'pets_create',
+  description: 'WHEN TO USE: test — allow-listed REST write.',
+  input: { name: { type: 'string', description: 'Pet name', required: true } },
+  steps: [{ id: 'c', kind: 'mcp_call', server: 'pets', tool: 'createPet', args: { body: { name: '{{input.name}}' } } }],
+  output: 'created {{steps.c.id}}',
+  proposal: 'About to create pet {{input.name}}.',
+}

@@ -1,0 +1,7 @@
+{
+  name: 'pets_delete',
+  description: 'WHEN TO USE: test — unlisted DELETE must be refused.',
+  input: {},
+  steps: [{ id: 'd', kind: 'mcp_call', server: 'pets', tool: 'deletePet', args: { petId: 'p1' } }],
+  output: '{{steps.d}}',
+}

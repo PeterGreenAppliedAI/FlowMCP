@@ -1,0 +1,48 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Pets fixture", "version": "1" },
+  "servers": [{ "url": "http://placeholder.invalid/api" }],
+  "paths": {
+    "/pets": {
+      "get": {
+        "operationId": "listPets",
+        "summary": "List pets",
+        "parameters": [{ "name": "limit", "in": "query", "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "ok" } }
+      },
+      "post": {
+        "operationId": "createPet",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewPet" } } } },
+        "responses": { "201": { "description": "created" } }
+      }
+    },
+    "/pets/search": {
+      "post": {
+        "operationId": "searchPets",
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "q": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "ok" } }
+      }
+    },
+    "/pets/{petId}": {
+      "parameters": [{ "name": "petId", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": { "operationId": "getPet", "responses": { "200": { "description": "ok" } } },
+      "delete": { "operationId": "deletePet", "responses": { "204": { "description": "gone" } } }
+    },
+    "/tags": { "get": { "summary": "List tags (no operationId)", "responses": { "200": { "description": "ok" } } } },
+    "/redirect-out": { "get": { "operationId": "redirectOut", "responses": { "302": { "description": "away" } } } },
+    "/redirect-in": { "get": { "operationId": "redirectIn", "responses": { "302": { "description": "home" } } } },
+    "/../secret": { "get": { "operationId": "escape", "responses": { "200": { "description": "no" } } } },
+    "/upload": {
+      "post": {
+        "operationId": "upload",
+        "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "ok" } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "NewPet": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "friend": { "$ref": "#/components/schemas/NewPet" } } }
+    }
+  }
+}

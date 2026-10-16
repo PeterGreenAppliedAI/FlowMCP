@@ -1,0 +1,7 @@
+{
+  name: 'pets_search',
+  description: 'WHEN TO USE: test — POST search attested as a read.',
+  input: { q: { type: 'string', description: 'Search text', required: true } },
+  steps: [{ id: 's', kind: 'mcp_call', server: 'pets', tool: 'searchPets', args: { body: { q: '{{input.q}}' } } }],
+  output: 'found {{steps.s.matches[0]}}',
+}

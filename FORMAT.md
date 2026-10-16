@@ -120,6 +120,23 @@ explicit opt-in), and are spawned with **cwd = the directory containing
 config that names them, never against wherever the flowmcp process happened
 to be started (MCP servers are always spawned from somewhere else).
 
+**OpenAPI** (`openapi`, `baseUrl?`, `headers?`, `query?`) wraps a plain REST
+API — no MCP server involved. `openapi` is a spec URL or a path relative to
+`servers.json5`; every operation becomes a tool named by its `operationId`
+(else `<method>_<path>`), with path/query/header parameters as top-level
+arguments and the request body under `body`. `mcp_call` steps call these
+tools exactly like MCP tools, and the admission rules below apply unchanged.
+Reads are **derived from HTTP method semantics**: GET/HEAD/OPTIONS carry
+`readOnlyHint`; every other method is a write until attested (e.g. a POST
+search endpoint) or allow-listed. `baseUrl` overrides the spec's
+`servers[0].url`; `headers`/`query` carry auth and may interpolate
+`{{env.X}}`. Fail-closed scope: OpenAPI 3.x JSON only (Swagger 2.0 and YAML
+refuse at connect), local `$ref`s only, JSON and form-urlencoded bodies only.
+Requests are confined to the base URL (dot-segment path parameters refuse),
+redirects are followed only within the API's origin, credentials are
+redacted from errors, and auth headers are sent to the spec host only when it
+is the API's own origin.
+
 **Migration note (v0.6):** configs written before v0.6 relied on process-cwd
 resolution; every relative path in an existing `servers.json5` must be
 re-anchored to the file's own directory. The runtime warns at startup when a

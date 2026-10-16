@@ -128,7 +128,25 @@ MCP — tokens interpolated from env):
 
 (`shell` defaults to false. On Windows, `.cmd` shims like `npx` need `shell: true` — or point `command` directly at a Node entry point. `servers.json5` is operator-trusted config, so the shell opt-in is a portability knob, not an injection surface. Relative paths in `command`/`args` resolve against the directory containing `servers.json5` — the config works no matter where the flowmcp process was started from.)
 
-Then use an `mcp_call` step like any other:
+Plain REST APIs need no MCP server at all — point an entry at the API's
+OpenAPI 3.x spec and every operation becomes a callable tool under the same
+rules (GET reads are admitted by method semantics; any other method is a
+write until attested or allow-listed):
+
+```json5
+{
+  pets: {
+    openapi: './pets.openapi.json',            // or an https:// URL
+    baseUrl: 'https://api.example.com/v1',     // optional: overrides servers[0].url
+    headers: { 'X-Api-Key': '{{env.PETS_KEY}}' },
+    attestReadOnly: ['searchPets'],            // a POST that only reads
+    allow: ['createPet'],                      // a write, two-phase gated
+  },
+}
+```
+
+Then use an `mcp_call` step like any other (REST operations take path/query
+parameters as arguments and the request body as `body`):
 
 ```json5
 { id: 'issue', kind: 'mcp_call', server: 'github', tool: 'get_issue',

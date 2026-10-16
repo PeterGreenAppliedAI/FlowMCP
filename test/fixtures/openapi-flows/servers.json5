@@ -1,0 +1,12 @@
+// A plain REST API (no MCP server) wrapped from its OpenAPI spec. GET reads
+// are admitted by method semantics; searchPets is a POST attested as a read;
+// createPet is an allow-listed write; deletePet is neither and is refused.
+{
+  pets: {
+    openapi: './pets.openapi.json',
+    baseUrl: '{{env.PETS_URL}}/api',
+    headers: { 'X-Api-Key': '{{env.PETS_KEY}}' },
+    attestReadOnly: ['searchPets'],
+    allow: ['createPet'],
+  },
+}

@@ -13,6 +13,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { interpolate } from './interpolate.js';
+import { OpenApiDownstreamClient, type OpenApiTarget } from './openapi.js';
 
 // Protocol revisions the hand-rolled sides of this codebase support. The SDK
 // client negotiates its own (current) revision for HTTP downstreams.
@@ -344,8 +345,10 @@ export function createDownstreamClient(
   name: string,
   config:
     | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string>; inheritEnv: boolean; shell: boolean; cwd?: string }
-    | { transport: 'http'; url: string; headers: Record<string, string> },
+    | { transport: 'http'; url: string; headers: Record<string, string> }
+    | ({ transport: 'openapi' } & OpenApiTarget),
 ): DownstreamClient {
+  if (config.transport === 'openapi') return new OpenApiDownstreamClient(name, config);
   return config.transport === 'http'
     ? new HttpDownstreamClient(name, config)
     : new StdioDownstreamClient(name, config);
