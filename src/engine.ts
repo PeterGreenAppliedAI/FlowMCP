@@ -2,6 +2,7 @@ import { evalExpr, type ExprContext } from './expr.js';
 import { interpolate, interpolateDeep, interpolateUrl, stringify } from './interpolate.js';
 import type { Flow, HttpStep, LeafStep, McpCallStep, Step } from './flow-schema.js';
 import type { McpPool } from './mcp-pool.js';
+import { HTTP_STATUS } from './downstream.js';
 
 const FLOW_TIMEOUT_MS = 60_000;
 const MAP_LIMIT = 10;
@@ -28,6 +29,18 @@ interface FlowContext extends ExprContext {
   input: Record<string, unknown>;
   env: Record<string, string | undefined>;
   steps: Record<string, unknown>;
+  // ids of read steps that came back "not found" (`absent`). A Symbol key:
+  // expressions cannot reach it, and map's {...ctx} copies share the array.
+  [ABSENT_LOG]?: string[];
+}
+
+const ABSENT_LOG: unique symbol = Symbol('flowmcp.absent');
+// returned by runHttp/runMcpCall when the failure is one the step declared
+// as absence; runStep turns it into null and logs the step id
+const ABSENT: unique symbol = Symbol('flowmcp.absentResult');
+
+function absentIds(ctx: FlowContext): string[] {
+  return ctx[ABSENT_LOG] ?? [];
 }
 
 export interface PendingFlow {
@@ -36,7 +49,7 @@ export interface PendingFlow {
 }
 
 export type FlowRun =
-  | { status: 'complete'; text: string }
+  | { status: 'complete'; text: string; absent?: string[] }
   | { status: 'pending'; pending: PendingFlow; proposalText: string };
 
 export async function executeFlow(
@@ -52,6 +65,7 @@ export async function executeFlow(
     input: coerceInput(flow, args),
     env,
     steps: {},
+    [ABSENT_LOG]: [],
   };
   return runSteps(flow, ctx, 0, opts, opts.writeGate);
 }
@@ -94,7 +108,9 @@ async function runSteps(
     ctx.steps[step.id] = await runStep(step, step.id, ctx, deadline, opts.mcp);
   }
   try {
-    return { status: 'complete', text: interpolate(flow.output, ctx) };
+    const text = interpolate(flow.output, ctx);
+    const absent = absentIds(ctx);
+    return absent.length ? { status: 'complete', text, absent } : { status: 'complete', text };
   } catch (e) {
     throw new FlowError('output', errMessage(e));
   }
@@ -134,16 +150,21 @@ async function runStep(
   mcp?: McpPool,
 ): Promise<unknown> {
   if (Date.now() >= deadline) throw new FlowError(id, 'flow timed out (60s limit)');
+  const orAbsent = (value: unknown): unknown => {
+    if (value !== ABSENT) return value;
+    ctx[ABSENT_LOG]?.push(id);
+    return null;
+  };
   try {
     switch (step.kind) {
       case 'http_request':
-        return await runHttp(step, ctx, deadline);
+        return orAbsent(await runHttp(step, ctx, deadline));
       case 'transform':
         return evalExpr(step.expr, ctx);
       case 'template':
         return interpolate(step.template, ctx);
       case 'mcp_call':
-        return await runMcpCall(step, ctx, deadline, mcp);
+        return orAbsent(await runMcpCall(step, ctx, deadline, mcp));
       case 'map':
         return await runMap(step, id, ctx, deadline, mcp);
       case 'branch':
@@ -173,6 +194,10 @@ async function runMcpCall(
     .map((c) => c.text)
     .join('\n');
   if (result.isError) {
+    const status = result[HTTP_STATUS];
+    if (step.absent === 'any-error' || (Array.isArray(step.absent) && status !== undefined && step.absent.includes(status))) {
+      return ABSENT;
+    }
     throw new Error(`tool '${step.tool}' on server '${step.server}' returned an error: ${text || '(no detail)'}`);
   }
   // Prefer typed structuredContent over parsing JSON back out of text.
@@ -214,7 +239,10 @@ async function runHttp(step: HttpStep, ctx: FlowContext, deadline: number): Prom
       body,
       signal: AbortSignal.timeout(Math.min(step.timeoutMs, remaining)),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status} from ${step.method} ${url}`);
+    if (!res.ok) {
+      if (Array.isArray(step.absent) && step.absent.includes(res.status)) return ABSENT;
+      throw new Error(`HTTP ${res.status} from ${step.method} ${url}`);
+    }
     const contentType = res.headers.get('content-type') ?? '';
     return contentType.includes('json') ? res.json() : res.text();
   };

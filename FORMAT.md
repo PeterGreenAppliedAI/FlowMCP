@@ -59,6 +59,33 @@ Every named step has a `snake_case` `id`, unique within the flow.
   `structuredContent` is preferred over parsing JSON out of text; oversized
   results are truncated with an explicit marker.
 
+**`absent`** (v0.11) — on a read `http_request` or `mcp_call`: the failures
+that mean "not found" and are data, not errors. The step's value becomes
+`null`, the flow continues, and a `branch` on `steps.<id> == null` picks
+what to render (reading *through* the `null` is still a loud failure).
+
+- `absent: [404]` — a list of 4xx statuses (400–499; a 5xx, a timeout or a
+  network error is an outage and always fails). Allowed on `http_request` and
+  on `mcp_call` to an `openapi` server, where the adapter sees the status.
+  The status travels outside the result's JSON, so a downstream server cannot
+  make an error look absent by what it writes.
+- `absent: 'any-error'` — the weaker, explicit form for MCP tools (stdio,
+  http, graphql), which report only `isError` and text. It covers an
+  `isError` result; a thrown failure (connection, timeout, refused tool)
+  still fails.
+- Refused at load: on any write step (a failed write may have been applied);
+  `'any-error'` where statuses exist; a status list where none can be seen.
+- Each absence is reported: the run's step ids (map items as `id[i]`) appear
+  in the run log's `absent` field.
+
+```json5
+{ id: 'release', kind: 'mcp_call', server: 'github', tool: 'repos_get-latest-release',
+  args: { owner: '{{input.owner}}', repo: '{{input.repo}}' }, absent: [404] },
+{ id: 'release_line', kind: 'branch', if: 'steps.release == null',
+  then: [{ id: 'none', kind: 'template', template: 'No published release' }],
+  else: [{ id: 'some', kind: 'template', template: '{{steps.release.tag_name}}' }] },
+```
+
 ## Expressions and interpolation
 
 The expression language is deliberately not a programming language: paths
@@ -89,7 +116,7 @@ prototype access. Available roots: `input`, `env` (declared vars only),
 ## Execution semantics
 
 Steps run strictly in order. Whole-flow timeout: 60s. A failed step aborts the
-flow; the MCP result is `isError: true` with text naming the flow, the step id,
+flow (a failure the step declares `absent` is not a failure: its value is `null`); the MCP result is `isError: true` with text naming the flow, the step id,
 and the cause. Input validation (unknown parameter, missing required, type
 mismatch) fails the same way, before any step runs — with one serving-layer
 exception: on a **read-only** flow, unknown parameters are dropped with a
@@ -260,6 +287,8 @@ must skip (and count) malformed lines rather than fail. Record kinds:
 // runtime-emitted: one flow execution (loud failures carry the step + cause)
 {"ts":"2026-08-02T03:10:00Z","flow":"weekly_gather","kind":"run","ok":true,"ms":4521}
 {"ts":"…","flow":"weekly_gather","kind":"run","ok":false,"ms":810,"error":"step 'sweep': …"}
+// a success where declared-absent steps came back "not found"
+{"ts":"…","flow":"repo_health","kind":"run","ok":true,"ms":2035,"absent":["release"]}
 
 // consumer-emitted: an editorial staleness observation. `lenses` names the
 // thin parts of the output so persistence is detectable across runs.

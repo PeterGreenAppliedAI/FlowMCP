@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
+  checkAbsentSteps,
   checkServerRefs,
   flowEffects,
   loadFlows,
@@ -53,7 +54,7 @@ interface ServerState {
 }
 
 // Best-effort run logging: a log write failure must never fail the tool call.
-async function recordRun(state: ServerState, flowName: string, ok: boolean, startedAt: number, error?: string): Promise<void> {
+async function recordRun(state: ServerState, flowName: string, ok: boolean, startedAt: number, error?: string, absent?: string[]): Promise<void> {
   if (!state.registry) return;
   try {
     await appendLog(state.dir, {
@@ -63,6 +64,9 @@ async function recordRun(state: ServerState, flowName: string, ok: boolean, star
       ok,
       ms: Date.now() - startedAt,
       ...(error ? { error } : {}),
+      // steps that came back "not found" (declared `absent`): a success, but
+      // one a status reader can see — an always-absent step is drift
+      ...(absent?.length ? { absent } : {}),
     });
   } catch (e) {
     log(`registry log append failed: ${e instanceof Error ? e.message : e}`);
@@ -208,7 +212,7 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
       writeGate: gate?.size ? gate : undefined,
     });
     if (run.status === 'complete') {
-      await recordRun(state, flow.name, true, startedAt);
+      await recordRun(state, flow.name, true, startedAt, undefined, run.absent);
       return { content: [{ type: 'text', text: run.text }] };
     }
     // Write pause. With elicitation, the host mediates the approval — the
@@ -227,7 +231,7 @@ async function toolsCall(state: ServerState, params: Record<string, unknown>): P
         return { content: [{ type: 'text', text: `Declined: '${flow.name}' was not approved. Nothing was written.` }] };
       }
       const resumed = await resumeFlow(flow, run.pending, { mcp: state.pool });
-      await recordRun(state, flow.name, true, startedAt);
+      await recordRun(state, flow.name, true, startedAt, undefined, resumed.status === 'complete' ? resumed.absent : undefined);
       return { content: [{ type: 'text', text: resumed.status === 'complete' ? resumed.text : '' }] };
     }
     const token = randomUUID();
@@ -324,6 +328,7 @@ async function main(): Promise<void> {
     let flows = await loadFlows(dir);
     const servers = await loadServers(dir);
     checkServerRefs(flows, new Set(Object.keys(servers)));
+    checkAbsentSteps(flows, servers);
     // A registry beside the flows opts the directory into promotion
     // governance: every flow must be listed, only 'active' flows serve.
     const registry = await loadRegistry(dir);

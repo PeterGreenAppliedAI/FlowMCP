@@ -2,6 +2,44 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-10-18 — `absent`: a read's "not found" is data, not a failure
+
+**What didn't work:** the authored `repo_health` flow failed outright on a repo
+with no releases: `repos_get-latest-release` returns 404, and any failed step
+aborts the flow. Flows had no way to say "this might not exist". The obvious
+fixes were each too broad. `optional: true` on any step, or treating every
+error as empty, would also hide a 500, an expired token, or a dropped
+connection. That would turn an outage into a confident "No published release".
+
+**Why tests missed it:** every fixture and every repo used in authoring had
+a release. "Not found" never came up while recording, so the compiler had
+nothing to work from, and no test asked what a 404 should do.
+
+**The fix:** of four options, we chose the narrow one (B):
+- `absent: [404]` on a read `http_request` or an OpenAPI `mcp_call`. Only
+  declared statuses count, and only 4xx statuses can be declared. The step's
+  value becomes `null`, and a `branch` picks what to render. Reading
+  *through* `null` still fails loudly.
+- The status comes from the adapter, under a Symbol key, never from the
+  result's text. A downstream server that writes "HTTP 404" in its error
+  can't fake absence.
+- Generic MCP tools report no status, so they get `absent: 'any-error'` as
+  an explicit opt-in. It covers `isError` results only, never thrown failures.
+- The loader refuses `absent` on writes (a failed write may have been
+  applied), using the same `subtreeHasWrite` rule as the approval gate. It
+  refuses `'any-error'` where real statuses exist, and a status list where
+  none can be seen.
+- The run log records which steps came back absent (`"absent":["release"]`,
+  and `pets[1]` inside a map), so a step that is absent every time still
+  shows up as drift.
+
+Regression tests: `test/absent.test.ts`, 8 tests. 7 fail on the pre-fix code;
+the 8th, "error text never counts", passes on the old code too and stays as
+a guard. Live: the `repo_health` flow, edited by hand to add `absent` plus a
+branch, renders "No published release" on FlowMCP and tag v5.0.5 on vitest.
+Remaining limit: `author` doesn't emit `absent` yet. The recording never sees
+the 404, so it needs a second input set that triggers it (phase 2).
+
 ## 2026-10-18 — first `flowmcp author` run against a REST API (GitHub, GLM)
 
 **What didn't work:** `author` had only ever run against small MCP servers.

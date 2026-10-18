@@ -18,7 +18,7 @@ import { resolve } from 'node:path';
 import JSON5 from 'json5';
 import { parse as parseYaml } from 'yaml';
 import { interpolate } from './interpolate.js';
-import type { DownstreamClient, DownstreamTool, McpResult } from './downstream.js';
+import { HTTP_STATUS, type DownstreamClient, type DownstreamTool, type McpResult } from './downstream.js';
 
 export interface OpenApiTarget {
   /** Spec location: http(s) URL or a path (relative to cwd). May use {{env.X}}. */
@@ -284,7 +284,7 @@ export class OpenApiDownstreamClient implements DownstreamClient {
 
     const text = await res.text();
     if (!res.ok) {
-      return errorResult(`HTTP ${res.status} ${res.statusText}: ${this.redact(text.slice(0, 500)) || '(empty body)'}`);
+      return { ...errorResult(`HTTP ${res.status} ${res.statusText}: ${this.redact(text.slice(0, 500)) || '(empty body)'}`), [HTTP_STATUS]: res.status };
     }
     const isJson = /\bjson\b/i.test(res.headers.get('content-type') ?? '');
     if (isJson && text.length) {

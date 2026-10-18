@@ -23,7 +23,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { checkServerRefs, flowEffects, loadFlows, loadServers } from './loader.js';
+import { checkAbsentSteps, checkServerRefs, flowEffects, loadFlows, loadServers } from './loader.js';
 import { executeFlow } from './engine.js';
 import { McpPool } from './mcp-pool.js';
 import { appendLog, loadRegistry } from './registry.js';
@@ -77,6 +77,7 @@ export async function shadowCli(): Promise<void> {
   const flows = await loadFlows(dir);
   const servers = await loadServers(dir);
   checkServerRefs(flows, new Set(Object.keys(servers)));
+  checkAbsentSteps(flows, servers);
   const flow = flows.find((f) => f.name === flowName);
   if (!flow) throw new Error(`no flow named '${flowName}' in ${dir}`);
   if (!flowEffects(flow, servers).readOnly) {

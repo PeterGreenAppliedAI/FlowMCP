@@ -38,7 +38,13 @@ export interface McpResult {
   content?: Array<{ type: string; text?: string }>;
   structuredContent?: unknown;
   isError?: boolean;
+  /** The HTTP status behind an error, set only by adapters that see one
+   *  (OpenAPI). A Symbol key: no JSON from a remote MCP server can carry it,
+   *  so a server cannot make its errors look like "not found". */
+  [HTTP_STATUS]?: number;
 }
+
+export const HTTP_STATUS: unique symbol = Symbol('flowmcp.httpStatus');
 
 export interface DownstreamClient {
   connect(deadline: number): Promise<void>; // includes the initialize handshake

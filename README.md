@@ -76,7 +76,7 @@ Check a directory without serving: `npm start -- --flows ./my-flows --validate` 
 | `branch` | `if`, `then`, `else?` | Evaluate a condition, run one of two step lists. No nested branches. |
 | `mcp_call` | `server`, `tool`, `args?`, `timeoutMs?` (default 30000), `maxResultChars?` (default 8000) | Call one tool on a downstream MCP server from `servers.json5`. See Composition below. |
 
-Everything downstream of a step sees `input.*`, `env.*` (for `{{env.API_KEY}}` — never put secrets in flow files), and `steps.<id>`. A failed step aborts the flow and returns a structured `isError` result naming the step. Whole-flow timeout: 60s.
+Everything downstream of a step sees `input.*`, `env.*` (for `{{env.API_KEY}}` — never put secrets in flow files), and `steps.<id>`. A failed step aborts the flow and returns a structured `isError` result naming the step. Whole-flow timeout: 60s. A read step can declare which failures mean "not found" (`absent: [404]` on `http_request` or an OpenAPI `mcp_call`, or `absent: 'any-error'` as an explicit opt-in for MCP tools). Its value becomes `null`, a `branch` picks the fallback, and the run log names it. Outages and auth failures still fail, and `absent` is refused on writes. See [FORMAT.md](FORMAT.md).
 
 ### Writing your own flow
 

@@ -16,12 +16,22 @@ const paramSchema = z
     path: ['default'],
   });
 
+// A read step whose "not found" is data, not failure (v0.11). Statuses must be
+// 4xx: a 5xx or a network error is an outage and still fails the flow.
+// 'any-error' is the explicit, weaker opt-in for MCP tools, which report no
+// HTTP status. Load-time checks (loader.checkAbsentSteps) refuse it on writes,
+// and refuse each form where the other one applies.
+export const absentSchema = z
+  .union([z.array(z.number().int().min(400).max(499)).min(1), z.literal('any-error')])
+  .optional();
+
 const httpFields = {
   method: z.enum(['GET', 'POST']).default('GET'),
   url: z.string().min(1),
   headers: z.record(z.string()).optional(),
   body: z.unknown().optional(),
   timeoutMs: z.number().int().positive().max(60_000).default(15_000),
+  absent: absentSchema,
 };
 
 // Leaf steps carry no id — they appear inside `map`.
@@ -39,6 +49,7 @@ const leafMcpCall = z
     args: z.record(z.unknown()).default({}),
     timeoutMs: z.number().int().positive().max(60_000).default(30_000),
     maxResultChars: z.number().int().positive().max(1_000_000).default(8_000),
+    absent: absentSchema,
   })
   .strict();
 

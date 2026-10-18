@@ -128,6 +128,29 @@ export function topLevelWriteStepIds(flow: Flow, servers: Record<string, ServerC
   return new Set(flow.steps.filter((s) => subtreeHasWrite(s, servers)).map((s) => s.id));
 }
 
+// `absent` makes "not found" data instead of a failure, so it is held to the
+// narrowest form that can work: reads only (a write that failed may have half
+// landed), HTTP statuses wherever a status exists, and 'any-error' only where
+// none does — an MCP tool, which reports isError and text, nothing else.
+export function checkAbsentSteps(flows: Flow[], servers: Record<string, ServerConfig>): void {
+  for (const flow of flows) {
+    walkSteps(flow, (step) => {
+      if ((step.kind !== 'http_request' && step.kind !== 'mcp_call') || step.absent === undefined) return;
+      const where = `flow '${flow.name}': ${step.kind === 'mcp_call' ? `mcp_call ${step.server}.${step.tool}` : `http_request ${step.url}`}`;
+      if (subtreeHasWrite(step, servers)) {
+        throw new Error(`${where} is a write — 'absent' is only for reads; a failed write may have been applied`);
+      }
+      const hasStatus = step.kind === 'http_request' || servers[step.server]?.transport === 'openapi';
+      if (hasStatus && step.absent === 'any-error') {
+        throw new Error(`${where} reports HTTP statuses — declare them (absent: [404]); 'any-error' would also hide outages and auth failures`);
+      }
+      if (!hasStatus && step.absent !== 'any-error') {
+        throw new Error(`${where}: server '${(step as { server: string }).server}' reports no HTTP status, so absent: [${(step.absent as number[]).join(', ')}] could never match — use absent: 'any-error' to opt in explicitly`);
+      }
+    });
+  }
+}
+
 export function checkServerRefs(flows: Flow[], serverNames: Set<string>): void {
   for (const flow of flows) {
     walkSteps(flow, (step) => {
