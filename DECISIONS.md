@@ -2,6 +2,59 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-10-18 — first `flowmcp author` run against a REST API (GitHub, GLM)
+
+**What didn't work:** `author` had only ever run against small MCP servers.
+Against the full GitHub REST API (651 read-only operations) with a local
+glm-5.3-flash model, the model wrote a correct script on the first try every
+time, but no flow came out until four more things were fixed:
+- **A literal mistaken for dataflow.** The script passed
+  `owner: "modelcontextprotocol"` as a literal, and `repos_get` returned the
+  same string at `owner.login`. The compiler matched by value, took the
+  argument for a ref, and refused it as unstable. Its output had the same
+  problem: a heading that spelled out the repo name matched `full_name`.
+- **Equal fields, wrong pick.** A release's `published_at` and `updated_at`
+  held the same timestamp. The script printed `published_at`, but the flow
+  read `updated_at`, because the variant-1 replay rewrote both values to the
+  same string and couldn't tell them apart.
+- **Reformatted values ended the run.** `toLocaleString()` and Date slicing
+  can't be expressed in a template. The repair loop only covered the record
+  step, so a replay or compile failure exited instead of going back to the
+  model, and the prompt never stated the constraint.
+- **The 8K cap broke the flow live.** Five vitest PR objects (~100K) were cut
+  to text before the map step (`cannot slice non-array`). Reading a field
+  from cut-off text rendered a silent blank.
+
+**Why tests missed them:** `compile()` had no unit tests outside the frozen
+benchmark corpus, whose fixtures use short, distinct values. Nothing
+exercised a literal equal to a result value, two fields with the same value,
+or results larger than the cap.
+
+**The fix:**
+- A string of 3+ characters that is unchanged across variants is classified
+  as a literal or input, never a ref, because variant 1 rewrites every such
+  result string.
+- Output templating runs on both variants together, line by line. A v0 value
+  that is still in the v1 line after that line's v1 data has been replaced is
+  literal text there.
+- Variant 1 tags each rewritten string by tool and path, so equal fields
+  differ, and the compiler follows the path variant 1 shows, for arguments
+  and output alike.
+- `author` states the template rule up front, and replay or compile failures
+  go back to the model with the reason. It warns when a script catches tool
+  errors, since the flow has no fallback.
+- Calls whose recorded result exceeds 2,000 characters get
+  `maxResultChars` ≥ 500,000. Slicing or reading a field from a truncated
+  result fails with an error that names the cap.
+
+Regression tests: `test/compile.test.ts` (new) and `test/engine.test.ts`.
+All five fail on the pre-fix code. The 10 benchmark trace pairs compile
+byte-identically before and after. Live: the authored `repo_health` flow
+works on `modelcontextprotocol/typescript-sdk` and on `vitest-dev/vitest`,
+which was never seen during authoring, in 0.7–2.2 s at zero model tokens.
+Remaining limit: on a repo with no releases, the flow fails at that step,
+because flows have no optional steps.
+
 ## 2026-10-16 — real-world validation: GitHub REST + GraphQL, Stripe, HN
 
 **What didn't work:** 0.10.0 was tested only against fixtures written

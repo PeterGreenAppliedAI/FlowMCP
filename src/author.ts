@@ -38,6 +38,13 @@ function flags(name: string): string[] {
   return out;
 }
 
+// The compiled flow is a fixed template over tool values, so the script may
+// only interpolate them. Told to the model up front and again on failure.
+const TEMPLATE_RULES =
+  'The script is compiled into a fixed template: put each tool value into the output exactly as the tool returned it. ' +
+  'Do not reformat values (no toLocaleString, no Date parsing or slicing, no rounding or arithmetic) and do not sort or ' +
+  'filter results in code — use the tools\' own parameters (sort, state, per_page) for that.';
+
 interface ToolDoc { name: string; server: string; description: string; params: string[]; example?: string }
 interface RunOut { variant: number; result?: string; error?: string; trace: Array<{ seq: number; name: string; args: unknown; result: unknown }> }
 
@@ -148,7 +155,7 @@ export async function authorCli(): Promise<void> {
     'Reply with ONLY JavaScript code defining `async function main(tools)`.\n' +
     '`tools` functions are async, take one object argument, return parsed JSON.\n' +
     'main must RETURN the final answer as a markdown string built from the retrieved data.\n' +
-    'No imports, no network, no filesystem — only the provided tools.\n\nAvailable tools:\n' + docText;
+    'No imports, no network, no filesystem — only the provided tools.\n' + TEMPLATE_RULES + '\n\nAvailable tools:\n' + docText;
   const messages: Array<{ role: string; content: string }> = [
     { role: 'system', content: system },
     { role: 'user', content: intent },
@@ -159,6 +166,7 @@ export async function authorCli(): Promise<void> {
   const cassettePath = join(outDir, 'cassette.json');
   let modelTokens = 0;
   let record: RunOut | null = null;
+  let compiled: ReturnType<typeof compile> | null = null;
   let toolMap: Record<string, string> = {};
   let script = '';
 
@@ -176,25 +184,47 @@ export async function authorCli(): Promise<void> {
     writeFileSync(scriptPath, code);
     const r = runChild(scriptPath, 'record', cassettePath);
     toolMap = { ...toolMap, ...r.toolMap };
-    if (!r.out.error) { record = r.out; break; }
-    console.error(`[author] attempt ${attempt} failed: ${r.out.error}`);
-    const evidence = r.out.trace.slice(0, 3).map((t) => `${t.name}(${JSON.stringify(t.args)}) returned: ${JSON.stringify(t.result).slice(0, 300)}`).join('\n');
+    if (r.out.error) {
+      console.error(`[author] attempt ${attempt} failed: ${r.out.error}`);
+      const evidence = r.out.trace.slice(0, 3).map((t) => `${t.name}(${JSON.stringify(t.args)}) returned: ${JSON.stringify(t.result).slice(0, 300)}`).join('\n');
+      messages.push({ role: 'assistant', content: gen.text },
+        { role: 'user', content: `Execution failed: ${r.out.error}\nActual tool results recorded:\n${evidence || '(none)'}\nReply with ONLY the corrected script.` });
+      continue;
+    }
+    // A script that runs live must also replay against altered tool data and
+    // compile to a fixed template. Reformatting a value (toLocaleString, Date
+    // slicing) or a literal that coincides with tool data fails here; the
+    // model gets the reason back instead of the run ending.
+    const v0 = runChild(scriptPath, 'replay', cassettePath, ['--variant', '0']).out;
+    const v1 = runChild(scriptPath, 'replay', cassettePath, ['--variant', '1']).out;
+    let failure = v0.error || v1.error ? `Replaying the script against altered tool data failed: ${v0.error ?? v1.error}` : '';
+    if (!failure) {
+      try {
+        compiled = compile(v0 as never, v1 as never, flowName, 'authored from intent',
+          { server: toolMap, inputHints, description: `WHEN TO USE: ${intent}` });
+        record = r.out;
+        break;
+      } catch (e) {
+        failure = `The script ran, but could not be compiled into a fixed flow: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+    console.error(`[author] attempt ${attempt}: ${failure}`);
     messages.push({ role: 'assistant', content: gen.text },
-      { role: 'user', content: `Execution failed: ${r.out.error}\nActual tool results recorded:\n${evidence || '(none)'}\nReply with ONLY the corrected script.` });
+      { role: 'user', content: `${failure}\n${TEMPLATE_RULES}\nReply with ONLY the corrected script.` });
   }
-  if (!record) throw new Error('authoring failed after 3 attempts');
+  if (!record || !compiled) throw new Error('authoring failed after 3 attempts');
   console.error(`[author] recorded ${record.trace.length} real tool call(s); model spend ${modelTokens} tokens`);
+  const { flow, provenance } = compiled;
+  // The trace shows only the path the recording took. A script that catches a
+  // tool error (a repo with no releases → 404) had a fallback the flow lacks:
+  // there the flow fails instead.
+  if (/\bcatch\b|\.catch\(/.test(script)) {
+    const w = 'the script handles tool errors (try/catch); the compiled flow has no fallback and fails where the script would have degraded — review inputs where a step can 404';
+    (provenance.warnings as string[] | undefined)?.push(w);
+    console.error(`[author] warning: ${w}`);
+  }
 
-  const scriptPath = join(outDir, 'source-script.js');
-  writeFileSync(scriptPath, script);
-  const v0 = runChild(scriptPath, 'replay', cassettePath, ['--variant', '0']).out;
-  const v1 = runChild(scriptPath, 'replay', cassettePath, ['--variant', '1']).out;
-  if (v0.error || v1.error) throw new Error(`replay failed: ${v0.error ?? v1.error}`);
-
-  const { flow, provenance } = compile(
-    v0 as never, v1 as never, flowName, 'authored from intent',
-    { server: toolMap, inputHints, description: `WHEN TO USE: ${intent}` },
-  );
+  writeFileSync(join(outDir, 'source-script.js'), script);
   writeFileSync(join(outDir, `${flowName}.flow.json5`), flow);
   writeFileSync(join(outDir, `${flowName}.provenance.json`), JSON.stringify({ ...provenance, intent, model, modelTokens, toolMap }, null, 2));
   copyFileSync(join(serversDir, 'servers.json5'), join(outDir, 'servers.json5'));

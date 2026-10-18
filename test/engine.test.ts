@@ -21,6 +21,16 @@ describe('evalExpr', () => {
     expect(evalExpr('env.KEY', ctx)).toBe('secret');
   });
 
+  // Regression, 2026-10-18 authored GitHub flow on vitest-dev/vitest: a result
+  // over maxResultChars is cut to text; slicing it failed with no reason given,
+  // and reading a field from it rendered a silent blank.
+  it('names the cap when a step reads into a truncated result', () => {
+    const cut = { steps: { pulls: '[{"number":1,"title":"a"…\n…[truncated 91234 chars]' } };
+    expect(() => evalExpr('steps.pulls[0:5]', cut)).toThrow(/truncated at its maxResultChars/);
+    expect(() => evalExpr('steps.pulls.title', cut)).toThrow(/truncated at its maxResultChars/);
+    expect(evalExpr('steps.pulls', cut)).toContain('[truncated'); // the text itself is still readable
+  });
+
   it('slices arrays with [a:b], [:b], [a:]', () => {
     expect(evalExpr('steps.ids[0:2]', ctx)).toEqual([1, 2]);
     expect(evalExpr('steps.ids[:3]', ctx)).toEqual([1, 2, 3]);

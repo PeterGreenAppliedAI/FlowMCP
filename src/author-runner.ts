@@ -22,14 +22,21 @@ const [scriptPath, mode, cassettePath, serversDir] = [process.argv[2]!, process.
 const variantIdx = Number(process.argv[process.argv.indexOf('--variant') + 1] || 0) || 0;
 const code = readFileSync(scriptPath, 'utf8');
 
-function mutate(value: unknown): unknown {
+// Variant 1's altered data. Each string is tagged by where it sits (tool +
+// path), so two fields that hold the same value live — a release's
+// published_at and updated_at — differ here, and the replayed output shows
+// which one the script actually read.
+function mutate(value: unknown, at: string): unknown {
   if (typeof value === 'string') {
-    if (value.startsWith('http')) return value + '/alt';
-    return value.length >= 3 ? `ALT ${value}` : value;
+    let h = 5381;
+    for (let i = 0; i < at.length; i++) h = ((h * 33) ^ at.charCodeAt(i)) >>> 0;
+    const tag = (h % 46656).toString(36).padStart(3, '0');
+    if (value.startsWith('http')) return `${value}/alt${tag}`;
+    return value.length >= 3 ? `ALT${tag} ${value}` : value;
   }
-  if (Array.isArray(value)) return value.map(mutate);
+  if (Array.isArray(value)) return value.map((v, i) => mutate(v, `${at}.${i}`));
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mutate(v)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mutate(v, `${at}.${k}`)]));
   }
   return value;
 }
@@ -57,7 +64,7 @@ async function buildTools(): Promise<Record<string, (args?: Record<string, unkno
       tools[name] = async (args = {}) => {
         const hit = cassette[key(name, args)];
         if (hit === undefined) throw new Error(`cassette miss: ${key(name, args)}`);
-        return record(name, args, variantIdx === 1 ? mutate(hit) : hit);
+        return record(name, args, variantIdx === 1 ? mutate(hit, name) : hit);
       };
     }
     return tools;

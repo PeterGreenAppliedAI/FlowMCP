@@ -192,7 +192,9 @@ class Parser {
     this.expect(']');
     if (!isSlice) return this.access(value, start!, trail);
     if (!Array.isArray(value)) {
-      throw new ExprError(`cannot slice non-array at '${trail}' in: ${this.src}`);
+      const cut = typeof value === 'string' && value.includes('…[truncated ')
+        ? " — the step's result was truncated at its maxResultChars; raise maxResultChars on that step" : '';
+      throw new ExprError(`cannot slice non-array at '${trail}' in: ${this.src}${cut}`);
     }
     return value.slice(start ?? 0, end);
   }
@@ -210,6 +212,11 @@ class Parser {
     }
     if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
       throw new ExprError(`forbidden property '${key}' in: ${this.src}`);
+    }
+    if (typeof value === 'string' && value.includes('…[truncated ')) {
+      // a capped result is text now — reading a field from it would render
+      // as a silent blank, not the value
+      throw new ExprError(`cannot read '${key}' at '${trail}': the step's result was truncated at its maxResultChars; raise maxResultChars on that step (in: ${this.src})`);
     }
     if (typeof value !== 'object') return undefined;
     return (value as Record<string | number, unknown>)[key];

@@ -88,9 +88,20 @@ export function compile(v0: Run, v1: Run, flowName: string, sourceName: string, 
     const args: Record<string, string> = {};
     for (const [p, v] of leaves(call.args)) {
       const v1leaf = leaves(call1.args).find(([p1]) => p1 === p)?.[1];
-      const ref = findRef(t0, i, v);
+      // Variant 1 rewrites every string of 3+ chars in recorded results, so
+      // such a string that is unchanged across variants did not come from a
+      // result — a value match there is coincidence (a literal owner name
+      // equal to a prior result's owner.login), not dataflow.
+      const followsNoData = typeof v === 'string' && v.length >= 3 && v === v1leaf;
+      let ref = followsNoData ? null : findRef(t0, i, v);
       if (ref) {
         const ref1 = findRef(t1, i, v1leaf);
+        // v0 holds the value at several paths; variant 1 tags each path apart,
+        // so it names the one the script read
+        if (ref1 && ref1.path !== ref.path && seqToNode.get(ref1.seq) !== undefined &&
+            leaves(t0.find((c) => c.seq === ref1.seq)?.result).some(([q, x]) => q === ref1.path && x === v)) {
+          ref = ref1;
+        }
         if (!ref1 || seqToNode.get(ref.seq) !== seqToNode.get(ref1.seq) || ref.path !== ref1.path) {
           throw new Refusal(`unstable ref for ${call.name}.${p} across variants`);
         }
@@ -178,7 +189,7 @@ export function compile(v0: Run, v1: Run, flowName: string, sourceName: string, 
 
   interface Group { gid: string; overExpr: string; items: unknown[] }
 
-  function templatize(run: Run): { outer: string; inners: Map<string, { template: string; count: number; overExpr: string }> } {
+  function templatize(run: Run): { lines: string[]; inners: Map<string, { template: string; count: number; overExpr: string }> } {
     const t = run.trace;
     const lines = run.result.split('\n');
     const groups: Group[] = [];
@@ -262,19 +273,57 @@ export function compile(v0: Run, v1: Run, flowName: string, sourceName: string, 
       }
       outLines.push(line);
     });
-    let text = outLines.join('\n');
+    return { lines: outLines, inners };
+  }
+
+  // Outer text: trace values become step refs, both variants in lockstep, line
+  // by line. A v0 value that is still in the v1 line after that line's v1 data
+  // is replaced is literal text there (variant 1 rewrites every result string),
+  // so it stays literal in v0 too — a heading that spells out the repo name
+  // must not turn into a ref to a result's full_name that happens to equal it.
+  function substOuter(l0: string[], l1: string[]): { outer0: string; outer1: string } {
+    const pairs: Array<{ x0: unknown; x1: unknown; ref: string }> = [];
     for (const n of kept.filter((k) => !k.fanout)) {
       for (const sq of n.seqs) {
-        for (const [p, v] of leaves(t.find((c) => c.seq === sq)!.result).sort((a, b) => String(b[1]).length - String(a[1]).length)) {
-          if (v === null) continue;
-          text = subst(text, v, `{{steps.${n.id}.${enginePath(p)}}}`);
+        const leaves1 = new Map(leaves(t1.find((c) => c.seq === sq)?.result));
+        for (const [p, x0] of leaves(t0.find((c) => c.seq === sq)!.result)) {
+          if (x0 !== null) pairs.push({ x0, x1: leaves1.get(p), ref: `{{steps.${n.id}.${enginePath(p)}}}` });
         }
       }
     }
-    return { outer: text, inners };
+    pairs.sort((a, b) => String(b.x0).length - String(a.x0).length);
+    // values spanning lines (PR bodies) cannot be matched per line: whole text
+    let j0 = l0.join('\n');
+    let j1 = l1.join('\n');
+    const multi = pairs.filter((q) => String(q.x0).includes('\n'));
+    for (const { x0, x1, ref } of multi) {
+      j0 = subst(j0, x0, ref);
+      if (x1 !== undefined && x1 !== null) j1 = subst(j1, x1, ref);
+    }
+    const out0 = j0.split('\n');
+    const out1 = j1.split('\n');
+    const lockstep = out0.length === out1.length;
+    for (const { x0, x1, ref } of pairs.filter((q) => !String(q.x0).includes('\n'))) {
+      for (let li = 0; li < out0.length; li++) {
+        let literalHere = false;
+        if (lockstep && x1 !== undefined && x1 !== null) {
+          const after = subst(out1[li]!, x1, ref);
+          literalHere = String(x0) !== String(x1) && subst(after, x0, '\u0000') !== after;
+          out1[li] = after;
+        }
+        if (!literalHere) out0[li] = subst(out0[li]!, x0, ref);
+      }
+      if (!lockstep && x1 !== undefined && x1 !== null) {
+        for (let li = 0; li < out1.length; li++) out1[li] = subst(out1[li]!, x1, ref);
+      }
+    }
+    return { outer0: out0.join('\n'), outer1: out1.join('\n') };
   }
-  const a0 = templatize(v0);
-  const a1 = templatize(v1);
+  const t0v = templatize(v0);
+  const t1v = templatize(v1);
+  const { outer0, outer1 } = substOuter(t0v.lines, t1v.lines);
+  const a0 = { outer: outer0, inners: t0v.inners };
+  const a1 = { outer: outer1, inners: t1v.inners };
   const innersEqual =
     a0.inners.size === a1.inners.size &&
     [...a0.inners].every(([gid, v]) => a1.inners.get(gid)?.template === v.template && a1.inners.get(gid)?.count === v.count);
@@ -298,7 +347,12 @@ export function compile(v0: Run, v1: Run, flowName: string, sourceName: string, 
       step: { kind: 'mcp_call', server: '${serverOf(n.tool)}', tool: '${n.tool}', args: { ${n.fanout.itemArgPath}: '{{x}}' } } },`);
     } else {
       const args = Object.entries(n.args).map(([p, v]) => `${p.includes('.') ? `'${p}'` : p}: '${v}'`).join(', ');
-      steps.push(`    { id: '${n.id}', kind: 'mcp_call', server: '${serverOf(n.tool)}', tool: '${n.tool}'${args ? `, args: { ${args} }` : ''} },`);
+      // Later steps read into this result, so the default 8K cap (which cuts
+      // it to a string) would break them on live data — five GitHub PR objects
+      // are ~100K. Sized from the recording, with headroom for bigger live data.
+      const recorded = JSON.stringify(t0.find((c) => c.seq === n.seqs[0])?.result ?? '').length;
+      const cap = recorded > 2_000 ? `, maxResultChars: ${Math.min(1_000_000, Math.max(500_000, recorded * 4))}` : '';
+      steps.push(`    { id: '${n.id}', kind: 'mcp_call', server: '${serverOf(n.tool)}', tool: '${n.tool}'${args ? `, args: { ${args} }` : ''}${cap} },`);
     }
   }
   let output = a0.outer;
