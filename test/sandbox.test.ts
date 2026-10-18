@@ -30,6 +30,16 @@ describe('authoring sandbox', () => {
     expect(logs).toEqual(['got {"tool":"search","got":{"q":"x","n":2}}']);
   });
 
+  it('passes input as a frozen object of the script realm, main(tools, input)', async () => {
+    const script = `async function main(tools, input) {
+      'use strict';
+      let frozen = false; try { input.repo = 'x'; } catch { frozen = true; }
+      return [input.repo, frozen, Object.getPrototypeOf(input) === Object.prototype].join(',');
+    }`;
+    expect(await runSandboxed(script, [], echo, { input: { repo: 'widgets' } })).toBe('widgets,true,true');
+    expect(await runSandboxed('async function main(tools, input) { return JSON.stringify(input); }', [], echo)).toBe('{}');
+  });
+
   it('supports the module.exports form', async () => {
     expect(await runSandboxed(`module.exports = async (tools) => 'ok';`, [], echo)).toBe('ok');
   });

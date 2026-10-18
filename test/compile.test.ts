@@ -92,3 +92,23 @@ describe('compile: argument classification across variants', () => {
     expect(flow).toMatch(/\{\{steps\.n0\.\[0\]\.number\}\}/);
   });
 });
+
+// 2026-10-18, phase 2's live run: the fifth PR title quoted text that another
+// PR's data also held ("feat"), so in variant 0 that line matched two items and
+// was left out of the list. The group counts then differed across variants,
+// line-by-line templating was skipped, and the compile was refused.
+describe('compile: list lines are assigned from variant 1', () => {
+  it('a line holding another item\'s short value still belongs to its own item', () => {
+    // variant 1 tags each string by its path, as the runner's mutate() does
+    const tag = (v: number, path: string) => (v ? `ALT${path} ` : '');
+    const items = (v: number) => [
+      { title: `${tag(v, '0t')}Alpha one`, head: `${tag(v, '0h')}main` },
+      { title: `${tag(v, '1t')}Beta two`, head: `${tag(v, '1h')}feat` },
+      { title: `${tag(v, '2t')}feat: gamma`, head: `${tag(v, '2h')}xyz` },
+    ];
+    const t = (v: number): Entry[] => [{ seq: 0, name: 'pulls_list', args: { state: 'open' }, result: items(v) }];
+    const out = (v: number) => `PRs:\n${items(v).map((it, i) => `${i + 1}. ${it.title}`).join('\n')}`;
+    const { flow } = compile(run(0, t(0), out(0)), run(1, t(1), out(1)), 'f', 'test', { server: 'github', inputHints: {} });
+    expect(flow).toContain("over: 'steps.n0[0:3]'");
+  });
+});

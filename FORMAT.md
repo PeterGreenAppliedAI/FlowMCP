@@ -77,6 +77,12 @@ what to render (reading *through* the `null` is still a loud failure).
   `'any-error'` where statuses exist; a status list where none can be seen.
 - Each absence is reported: the run's step ids (map items as `id[i]`) appear
   in the run log's `absent` field.
+- `flowmcp author` emits it from evidence: give an input set where the read
+  is not found (`--input repo=typescript-sdk,FlowMCP`) and the compiler adds
+  `absent` (404/410, or `'any-error'` for an `isError` result) and a branch
+  holding the script's fallback text. It refuses an outage or auth failure,
+  a call whose result later steps read, and a fallback that prints other tool
+  data.
 
 ```json5
 { id: 'release', kind: 'mcp_call', server: 'github', tool: 'repos_get-latest-release',

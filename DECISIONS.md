@@ -2,6 +2,59 @@
 
 What worked, what didn't, and what the fix was. Newest first.
 
+## 2026-10-18 — `author` emits `absent` from a second input set (phase 2)
+
+**What didn't work:** `absent` existed, but `author` could not produce it.
+The script had the input written into it as a literal and was recorded once,
+so the 404 never happened and the fallback text was never seen. The
+`repo_health` flow only got its absent step and branch by hand. The first
+live run of the new loop also failed before reaching the new code: the base
+run (typescript-sdk) would not compile. The fifth PR title quoted text that
+another PR's data also held, so in variant 0 that line matched two items and
+was left out of the list. The list then had 4 items in variant 0 and 5 in
+variant 1, line-by-line templating was skipped, and the heading and the
+release date picked the wrong refs ("templates differ across variants").
+
+**Why tests missed them:** nothing recorded more than one input. The
+compiler's list tests used values that never recur across items, and the
+earlier authored script printed fixed literals, so its heading and titles
+never collided with result data.
+
+**The fix:**
+- The script contract is `main(tools, input)`. `--input owner=a,b --input
+  repo=x,y` gives one recorded run per set, with the input passed into the
+  sandbox as a JSON string. Failed calls are recorded with the adapter's
+  status, so replays fail the same way.
+- `compilePaths` compiles the run where every call succeeded, then for each
+  run where one call failed: 404/410 gives `absent: [status]`, an `isError`
+  gives `'any-error'`, and anything else refuses. The base lines that read
+  that step become the branch's else; the then-text is read off what the
+  script printed in that run.
+- The flow is rendered by the engine against every recording. When it can
+  reproduce the base exactly, every run and both variants must match. When
+  it can't (dropped list numbering), the warning names the first line that
+  differs.
+- It refuses a later call that reads the failed result, two failed calls in
+  one run, and fallback text containing other tool data. Data is caught by
+  variant 1 for strings and by value for numbers, which variant 1 leaves
+  unchanged.
+- List lines are assigned to items from variant 1, where every string is
+  tagged by its path, and the same assignment is applied to variant 0.
+
+Regression tests: `test/compile-paths.test.ts` (new, 9 tests),
+`test/compile.test.ts` (the list-assignment test fails on the pre-fix
+compiler with the live error), and `test/sandbox.test.ts` (input crosses as a
+frozen object). The 10 benchmark trace pairs compile byte-identically. Live:
+authored on the first attempt from typescript-sdk and FlowMCP. The flow
+renders "No published release" for FlowMCP, and the real tag, date and PRs
+for typescript-sdk and for vitest, which neither recording saw. Remaining
+limits: an empty list is not a failed call, so the script's "- No open pull
+requests" is not compiled (the warning names that line). A one- or two-digit
+number in the output does not count as data for dead-call elimination, so a
+call whose only output is such a number is dropped and the number is
+written into the flow as fixed text. The new render check refuses that case
+for a second input set; a single-input run still does it silently.
+
 ## 2026-10-18 — `absent`: a read's "not found" is data, not a failure
 
 **What didn't work:** the authored `repo_health` flow failed outright on a repo

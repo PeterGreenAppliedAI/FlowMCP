@@ -43,17 +43,18 @@ const hostCall = (name, argsJson, done) => {
 };
 const hostLog = (line) => write({ type: 'log', line: String(line).slice(0, 4000) });
 
-function start(code, names) {
+function start(code, names, input) {
   const context = vm.createContext({}, { name: 'flowmcp-author', codeGeneration: { strings: false, wasm: false } });
   context.__host = hostCall;
   context.__log = hostLog;
   context.__names = JSON.stringify(names);
+  context.__input = String(input || '{}');
   // Bootstrap: capture the host callables in closures and delete the
   // globals, so untrusted code can never name a host-realm function.
   const run = new vm.Script(
     "'use strict';(() => {" +
-    "  const host = globalThis.__host, log = globalThis.__log, names = JSON.parse(globalThis.__names);" +
-    "  delete globalThis.__host; delete globalThis.__log; delete globalThis.__names;" +
+    "  const host = globalThis.__host, log = globalThis.__log, names = JSON.parse(globalThis.__names), input = Object.freeze(JSON.parse(globalThis.__input));" +
+    "  delete globalThis.__host; delete globalThis.__log; delete globalThis.__names; delete globalThis.__input;" +
     "  const parse = JSON.parse, stringify = JSON.stringify, P = Promise, E = Error, S = String;" +
     "  const tools = {};" +
     "  for (const n of names) tools[n] = (args) => new P((res, rej) => host(n, stringify(args === undefined ? {} : args)," +
@@ -62,7 +63,7 @@ function start(code, names) {
     "  const fmt = (...a) => log(a.map((x) => typeof x === 'string' ? x : (() => { try { return stringify(x); } catch { return S(x); } })()).join(' '));" +
     "  globalThis.console = Object.freeze({ log: fmt, info: fmt, warn: fmt, error: fmt, debug: fmt });" +
     "  globalThis.module = { exports: {} }; globalThis.exports = globalThis.module.exports;" +
-    "  return (main, finish) => P.resolve().then(() => main(tools)).then(" +
+    "  return (main, finish) => P.resolve().then(() => main(tools, input)).then(" +
     "    (r) => finish(true, S(r))," +
     "    (e) => finish(false, S(e && typeof e === 'object' && 'message' in e ? e.message : e)));" +
     "})()",
@@ -96,7 +97,7 @@ process.stdin.on('data', (chunk) => {
     buf = buf.slice(i + 1);
     if (!line.trim()) continue;
     const msg = JSON.parse(line);
-    if (msg.type === 'start' && !started) { started = true; start(msg.code, msg.names); }
+    if (msg.type === 'start' && !started) { started = true; start(msg.code, msg.names, msg.input); }
     else if (msg.type === 'result') {
       const done = pending.get(msg.id);
       pending.delete(msg.id);
@@ -110,9 +111,11 @@ export interface SandboxOptions {
   /** Whole-run budget; the child is killed when it elapses. */
   timeoutMs?: number;
   onLog?: (line: string) => void;
+  /** The script's second argument, `main(tools, input)`: crosses as a JSON string. */
+  input?: Record<string, string>;
 }
 
-/** Run untrusted `code` defining `async function main(tools)`. `call` is the
+/** Run untrusted `code` defining `async function main(tools, input)`. `call` is the
  *  broker's tool bridge — it decides what each name may do. Resolves with the
  *  stringified result; rejects with the script's error. */
 export function runSandboxed(
@@ -196,6 +199,6 @@ export function runSandboxed(
         }
       }
     });
-    send({ type: 'start', code, names });
+    send({ type: 'start', code, names, input: JSON.stringify(opts.input ?? {}) });
   });
 }

@@ -8,18 +8,24 @@
 // annotations.readOnlyHint are callable — allowlisted write tools are NOT
 // callable during authoring.
 //
-//   record: npx tsx author-runner.ts <script.js> record <cassette.json> <serversDir>
-//   replay: npx tsx author-runner.ts <script.js> replay <cassette.json> --variant 0|1
+//   record: npx tsx author-runner.ts <script.js> record <cassette.json> <serversDir> [--input <json>]
+//   replay: npx tsx author-runner.ts <script.js> replay <cassette.json> --variant 0|1 [--input <json>]
+//
+// A failed call is recorded too (status from the adapter, never from error
+// text), so a replay fails the same way and the compiler can see which call
+// came back absent for which input.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { loadServers } from './loader.js';
-import { createDownstreamClient, type DownstreamClient } from './downstream.js';
+import { createDownstreamClient, HTTP_STATUS, type DownstreamClient } from './downstream.js';
 import { runSandboxed } from './sandbox.js';
 
 interface ToolInfo { name: string; description?: string; annotations?: { readOnlyHint?: boolean } }
 
 const [scriptPath, mode, cassettePath, serversDir] = [process.argv[2]!, process.argv[3]!, process.argv[4]!, process.argv[5]];
 const variantIdx = Number(process.argv[process.argv.indexOf('--variant') + 1] || 0) || 0;
+const inputArg = process.argv.indexOf('--input');
+const input = inputArg !== -1 ? (JSON.parse(process.argv[inputArg + 1]!) as Record<string, string>) : {};
 const code = readFileSync(scriptPath, 'utf8');
 
 // Variant 1's altered data. Each string is tagged by where it sits (tool +
@@ -45,16 +51,25 @@ type Cassette = Record<string, unknown>;
 const cassette: Cassette = mode === 'replay' ? (JSON.parse(readFileSync(cassettePath, 'utf8')) as Cassette) : {};
 const key = (name: string, args: unknown) => `${name}|${JSON.stringify(args)}`;
 
-interface TraceEntry { seq: number; name: string; args: unknown; result: unknown }
+// status: a 4xx/5xx the adapter saw; isError: an MCP tool error (no status);
+// thrown: the call itself failed (connection, timeout)
+interface CallError { kind: 'status' | 'isError' | 'thrown'; status?: number; text: string }
+interface TraceEntry { seq: number; name: string; args: unknown; result: unknown; error?: CallError }
+const ERR = '__flowmcpError';
+const isRecordedError = (v: unknown): v is { [ERR]: CallError } => v !== null && typeof v === 'object' && ERR in v;
+const errorMessage = (name: string, e: CallError) =>
+  `${name} error${e.status ? ` (HTTP ${e.status})` : ''}: ${e.text.slice(0, 200)}`;
+
 const trace: TraceEntry[] = [];
 let seq = 0;
 const clients: DownstreamClient[] = [];
 
 async function buildTools(): Promise<Record<string, (args?: Record<string, unknown>) => Promise<unknown>>> {
   const tools: Record<string, (args?: Record<string, unknown>) => Promise<unknown>> = {};
-  const record = (name: string, args: unknown, result: unknown) => {
+  const record = (name: string, args: unknown, result: unknown, error?: CallError) => {
     if (trace.length > 40) throw new Error('trace call limit exceeded');
-    trace.push({ seq: seq++, name, args: JSON.parse(JSON.stringify(args ?? {})), result });
+    trace.push({ seq: seq++, name, args: JSON.parse(JSON.stringify(args ?? {})), result, ...(error ? { error } : {}) });
+    if (error) throw new Error(errorMessage(name, error));
     return result;
   };
   if (mode === 'replay') {
@@ -64,6 +79,7 @@ async function buildTools(): Promise<Record<string, (args?: Record<string, unkno
       tools[name] = async (args = {}) => {
         const hit = cassette[key(name, args)];
         if (hit === undefined) throw new Error(`cassette miss: ${key(name, args)}`);
+        if (isRecordedError(hit)) return record(name, args, null, hit[ERR]);
         return record(name, args, variantIdx === 1 ? mutate(hit, name) : hit);
       };
     }
@@ -82,9 +98,18 @@ async function buildTools(): Promise<Record<string, (args?: Record<string, unkno
       if (tools[t.name]) throw new Error(`tool name collision across servers: ${t.name}`);
       process.stderr.write(`TOOLMAP ${t.name} ${serverName}\n`);
       tools[t.name] = async (args = {}) => {
-        const res = await client.callTool(t.name, args, dl());
+        const fail = (error: CallError) => { cassette[key(t.name, args)] = { [ERR]: error }; return record(t.name, args, null, error); };
+        let res: Awaited<ReturnType<DownstreamClient['callTool']>>;
+        try {
+          res = await client.callTool(t.name, args, dl());
+        } catch (e) {
+          return fail({ kind: 'thrown', text: e instanceof Error ? e.message : String(e) });
+        }
         const text = (res.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
-        if (res.isError) throw new Error(`${t.name} error: ${text.slice(0, 200)}`);
+        if (res.isError) {
+          const status = res[HTTP_STATUS];
+          return fail(status ? { kind: 'status', status, text } : { kind: 'isError', text });
+        }
         let parsed: unknown;
         if (res.structuredContent !== undefined) parsed = res.structuredContent;
         else { try { parsed = JSON.parse(text); } catch { parsed = text; } }
@@ -107,6 +132,7 @@ const closeClients = () => Promise.all(clients.map((c) => Promise.resolve(c.clos
   const tools = await buildTools();
   const result = await runSandboxed(code, Object.keys(tools), (name, args) => tools[name]!(args), {
     timeoutMs: 55_000,
+    input,
     onLog: (line) => process.stderr.write(`[script] ${line}\n`),
   });
   if (mode === 'record') writeFileSync(cassettePath, JSON.stringify(cassette, null, 1));

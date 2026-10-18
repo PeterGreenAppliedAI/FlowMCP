@@ -223,7 +223,7 @@ One entry point for the whole loop (from a clone: `npx tsx src/cli.ts <cmd>`, or
 | `flowmcp validate [--flows <dir>]` | check flows + `servers.json5` + `registry.json5`, exit 0/1 |
 | `flowmcp status [--flows <dir>]` | registry health and advisory nominations |
 | `flowmcp explain [--flows <dir>]` | print a routing preamble for LLM hosts |
-| `flowmcp author --servers-dir <dir> --name <flow> --model <id> [--gateway <url>] "<intent>"` | author a flow with a model, under observation |
+| `flowmcp author --servers-dir <dir> --name <flow> --model <id> [--gateway <url>] [--input k=a,b] "<intent>"` | author a flow with a model, under observation; each `--input` value is a separate recorded run |
 | `flowmcp compile <run.v0.json> [outDir] [flowName] [serverName]` | compile a recorded trace into a candidate flow |
 | `flowmcp detect <executions.jsonl>` | nominate recurring procedures from execution logs |
 | `flowmcp shadow <flow> --agent '<cmd>' [--judge '<cmd>']` | shadow-verify a flow against a host-supplied agent |
@@ -251,7 +251,11 @@ The full loop exists and has run end-to-end: `detect.ts` nominates flow candidat
 execution logs (frequency × cost × success, inputs discovered from cross-run argument
 variance); `flowmcp author` takes an intent, introspects the configured servers'
 read-only tools, has a model write and repair a script, runs it isolated, records it
-against the real servers, and compiles the trace. The generated script runs in a separate
+against the real servers, and compiles the trace. With several input sets
+(`--input owner=a,b --input repo=x,y`) it records one run per set; a read that is "not
+found" for one set (a repo with no releases) compiles to an `absent` step and a branch
+holding what the script printed instead, and the flow is rendered against every
+recording to check it prints what the script did. The generated script runs in a separate
 Node child with an empty environment, the permission model granting no filesystem,
 subprocess, worker or addon access, and string/wasm code generation disabled — inside a
 vm context that holds only `tools` and `console`, where only strings cross the bridge.
