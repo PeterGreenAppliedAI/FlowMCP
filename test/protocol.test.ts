@@ -176,7 +176,7 @@ describe('MCP protocol over stdio', () => {
     });
     const result = res.result as { content: [{ text: string }]; isError?: boolean };
     expect(result.isError).toBeFalsy();
-    expect(client.stderr).toContain("ignoring unknown parameter 'town'");
+    await expect.poll(() => client.stderr).toContain("ignoring unknown parameter 'town'");
   });
 
   it('rejects unknown tools and unknown methods with JSON-RPC errors', async () => {

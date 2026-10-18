@@ -72,7 +72,7 @@ describe('registry enforcement', () => {
       const list = await client.request('tools/list');
       const names = (list.result!.tools as Array<{ name: string }>).map((t) => t.name);
       expect(names).toEqual(['reg_ok']);
-      expect(client.stderr).toContain(`'reg_fail' is 'candidate'`);
+      await expect.poll(() => client.stderr).toContain(`'reg_fail' is 'candidate'`);
     } finally {
       client.close();
     }

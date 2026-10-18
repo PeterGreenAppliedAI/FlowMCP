@@ -58,8 +58,8 @@ describe('stale path detection', () => {
     const client = new RpcClient(spawnServer(dir, {}, ['--validate']));
     const code = await new Promise<number | null>((resolve) => client['child'].on('exit', resolve));
     expect(code).toBe(0); // a warning, not a startup failure
-    expect(client.stderr).toContain(`'bench/compiler/no-such-server.ts' does not exist relative to`);
-    expect(client.stderr).toContain('since v0.6');
+    await expect.poll(() => client.stderr).toContain(`'bench/compiler/no-such-server.ts' does not exist relative to`);
+    await expect.poll(() => client.stderr).toContain('since v0.6');
   });
 });
 
@@ -74,8 +74,9 @@ describe('unknown-parameter policy', () => {
       expect((res.result as { isError?: boolean }).isError).toBeFalsy();
       const text = (res.result!.content as Array<{ text: string }>)[0]!.text;
       expect(text).toBe('ran clean');
-      expect(client.stderr).toContain(`ignoring unknown parameter 'input'`);
-      expect(client.stderr).toContain(`ignoring unknown parameter 'bogus'`);
+      // stderr is a separate pipe: the note can arrive after the stdout response
+      await expect.poll(() => client.stderr).toContain(`ignoring unknown parameter 'input'`);
+      await expect.poll(() => client.stderr).toContain(`ignoring unknown parameter 'bogus'`);
     } finally {
       client.close();
     }
