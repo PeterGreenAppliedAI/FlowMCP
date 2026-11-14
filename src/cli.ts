@@ -15,7 +15,12 @@
 // Legacy flag style (`flowmcp --flows x --validate`) still works: no
 // subcommand means serve, and serve reads the same flags it always did.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 const USAGE = `flowmcp — workflows are the tools
+
+  flowmcp --version                          print the package version and exit
 
   flowmcp serve    [--flows <dir>]           serve flows as MCP tools over stdio (default)
   flowmcp validate [--flows <dir>]           check flows + servers.json5 + registry.json5, exit 0/1
@@ -45,8 +50,17 @@ Format spec: FORMAT.md · https://github.com/PeterGreenAppliedAI/FlowMCP
 
 const sub = process.argv[2];
 
+// The version comes from package.json, read at run time: no second copy.
+function packageVersion(): string {
+  const pkg = readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8');
+  return (JSON.parse(pkg) as { version: string }).version;
+}
+
 async function main(): Promise<void> {
   switch (sub) {
+    case '--version':
+      process.stdout.write(`${packageVersion()}\n`);
+      return;
     case 'help':
     case '--help':
     case '-h':

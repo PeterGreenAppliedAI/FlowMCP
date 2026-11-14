@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { projectRoot } from './helpers.js';
@@ -24,6 +25,14 @@ describe('flowmcp CLI', () => {
     for (const cmd of ['serve', 'validate', 'status', 'explain', 'author', 'compile', 'detect']) {
       expect(res.stdout).toContain(`flowmcp ${cmd}`);
     }
+  });
+
+  it('--version prints the package.json version and exits 0', async () => {
+    const pkg = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8')) as { version: string };
+    const res = await runCli(['--version']);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toBe(`${pkg.version}\n`);
+    expect(res.stderr).toBe('');
   });
 
   it('validate subcommand checks a flows directory and exits 0', async () => {
