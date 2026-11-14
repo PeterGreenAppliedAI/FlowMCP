@@ -10,6 +10,7 @@
 // lives OUTSIDE these clients, in the pool.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { interpolate } from './interpolate.js';
@@ -75,6 +76,10 @@ export class StdioDownstreamClient implements DownstreamClient {
   private nextId = 1;
   private buffer = '';
   private closed = false;
+  // A multi-byte UTF-8 character can straddle two stdout chunks; decoding
+  // each chunk independently would corrupt it. One decoder per client spans
+  // the boundaries for the life of the connection.
+  private readonly decoder = new StringDecoder('utf8');
 
   constructor(private readonly name: string, private readonly target: StdioTarget) {}
 
@@ -140,7 +145,7 @@ export class StdioDownstreamClient implements DownstreamClient {
   }
 
   private onData(chunk: Buffer): void {
-    this.buffer += chunk.toString();
+    this.buffer += this.decoder.write(chunk);
     let idx: number;
     while ((idx = this.buffer.indexOf('\n')) !== -1) {
       const line = this.buffer.slice(0, idx);
