@@ -91,8 +91,12 @@ export async function loadRegistry(dir: string): Promise<Registry | undefined> {
   let text: string;
   try {
     text = await readFile(join(dir, REGISTRY_FILE), 'utf8');
-  } catch {
-    return undefined;
+  } catch (e) {
+    // Absent registry = no registry; any other read failure (EISDIR for a
+    // directory named registry.json5, EACCES, ...) is a real error and must
+    // not silently disable governance.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e;
   }
   let raw: unknown;
   try {
