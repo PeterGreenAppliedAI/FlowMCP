@@ -115,6 +115,18 @@ function sendResult(id: number | string | null, result: unknown): void {
   send({ jsonrpc: '2.0', id, result });
 }
 
+// Envelope validation: reject anything that is not a well-formed JSON-RPC 2.0
+// request before touching req.id. A null id is a valid id (still answered).
+function isValidRequest(req: unknown): req is JsonRpcRequest {
+  if (typeof req !== 'object' || req === null || Array.isArray(req)) return false;
+  const r = req as Record<string, unknown>;
+  if (r.jsonrpc !== '2.0') return false;
+  if (typeof r.method !== 'string') return false;
+  if (!('id' in r)) return true;
+  const id = r.id;
+  return id === null || typeof id === 'string' || typeof id === 'number';
+}
+
 function sendError(id: number | string | null, code: number, message: string): void {
   send({ jsonrpc: '2.0', id, error: { code, message } });
 }
@@ -444,11 +456,15 @@ async function main(): Promise<void> {
 }
 
 async function handleLine(state: ServerState, line: string): Promise<void> {
-  let req: JsonRpcRequest;
+  let req: unknown;
   try {
     req = JSON.parse(line);
   } catch {
     sendError(null, -32700, 'parse error');
+    return;
+  }
+  if (!isValidRequest(req)) {
+    sendError(null, -32600, 'invalid request');
     return;
   }
   const isNotification = req.id === undefined;
