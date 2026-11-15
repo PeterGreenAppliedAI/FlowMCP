@@ -261,6 +261,14 @@ describe('runFlow input conversion', () => {
   it('accepts finite JSON-number literals and rejects everything else', async () => {
     expect(await run(['n=0'])).toMatchObject({ n: 0 });
     expect(await run(['n=-12'])).toMatchObject({ n: -12 });
+    // Integer portions that end in zero are valid: the leading-zero rule must
+    // apply only to the first digit.
+    expect(await run(['n=10'])).toMatchObject({ n: 10 });
+    expect(await run(['n=-20'])).toMatchObject({ n: -20 });
+    expect(await run(['n=100'])).toMatchObject({ n: 100 });
+    expect(await run(['n=100.5'])).toMatchObject({ n: 100.5 });
+    expect(await run(['n=10e2'])).toMatchObject({ n: 1000 });
+    expect(await run(['n=120.50E-1'])).toMatchObject({ n: 12.05 });
     expect(await run(['n=1.5'])).toMatchObject({ n: 1.5 });
     expect(await run(['n=1e3'])).toMatchObject({ n: 1000 });
     expect(await run(['n=1E+3'])).toMatchObject({ n: 1000 });
@@ -277,6 +285,9 @@ describe('runFlow input conversion', () => {
       '7\t',
       '+1',
       '01',
+      '00',
+      '010',
+      '-01',
       '.5',
       '1.',
       '1.e3',
@@ -444,6 +455,40 @@ describe('runFlow registry admission', () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/not listed/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unlisted inherited-name sibling even when the selected flow is registered', async () => {
+    // Whole-directory coverage must use own properties. With flows 'good' and
+    // 'constructor' loaded and a registry listing only 'good', `name in
+    // registry` would accept 'constructor' via Object.prototype; runFlow must
+    // refuse the directory before executing the selected 'good' flow.
+    const dir = await makeDir({
+      'a.flow.json5': flow('good'),
+      'b.flow.json5': flow('constructor'),
+      [REGISTRY_FILE]: `{ good: { state: 'active' } }`,
+    });
+    fetchMock.mockResolvedValue(new Response('ok'));
+    const err = await runFlow({ dir, flow: 'good' }).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("flow 'constructor' is not listed");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mocks.factory).not.toHaveBeenCalled();
+  });
+
+  it('refuses a selected inherited-name flow as unlisted', async () => {
+    // Selecting 'constructor' itself: no own registry entry, so it must be
+    // refused as unlisted, never treated as an inherited registry member.
+    const dir = await makeDir({
+      'a.flow.json5': flow('constructor'),
+      'b.flow.json5': flow('reg_flow'),
+      [REGISTRY_FILE]: `{ reg_flow: { state: 'active' } }`,
+    });
+    fetchMock.mockResolvedValue(new Response('ok'));
+    const err = await runFlow({ dir, flow: 'constructor' }).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/not listed/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mocks.factory).not.toHaveBeenCalled();
   });
 
   it('checkRegistryCoverage reports a flow without an entry as unlisted', () => {

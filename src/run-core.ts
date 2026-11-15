@@ -66,7 +66,28 @@ export async function runFlow(options: RunFlowOptions): Promise<RunFlowResult> {
   checkServerRefs(flows, new Set(Object.keys(servers)));
   checkAbsentSteps(flows, servers);
   const registry = await loadRegistry(dir);
-  if (registry) checkRegistryCoverage(registry, flows.map((f) => f.name));
+  if (registry) {
+    // Own-property coverage for the whole directory: checkRegistryCoverage is
+    // the required API call, but its restored implementation uses `in` for
+    // flow membership, so an inherited Object.prototype name ('constructor',
+    // 'toString', …) would satisfy it. Refuse both an unlisted loaded flow and
+    // a registry entry matching no loaded flow using own properties only,
+    // before anything runs.
+    const files = new Set(flows.map((f) => f.name));
+    for (const name of flows.map((f) => f.name)) {
+      if (ownEntry(registry, name) === undefined) {
+        throw new Error(
+          `${REGISTRY_FILE}: flow '${name}' is not listed — add it (state: 'candidate' until reviewed) or remove the flow file`,
+        );
+      }
+    }
+    for (const name of Object.keys(registry)) {
+      if (!files.has(name)) {
+        throw new Error(`${REGISTRY_FILE}: entry '${name}' does not match any loaded flow`);
+      }
+    }
+    checkRegistryCoverage(registry, flows.map((f) => f.name));
+  }
 
   // 2. Look up the flow by declared name.
   const flow = flows.find((f) => f.name === flowName);
@@ -179,9 +200,13 @@ function isJsonNumberLiteral(text: string): boolean {
   if (text[i] === '-') i++;
   if (text[i] === '0') {
     i++;
+    // A lone '0' must not be followed by more integer digits ('01', '00').
+    if (text[i] !== undefined && text[i]! >= '0' && text[i]! <= '9') return false;
   } else {
-    if (digits() === 0) return false;
-    if (text[i - 1] === '0') return false; // leading zero, e.g. '01'
+    // Leading digit is 1-9, then any digits (which may end in zero).
+    if (text[i] === undefined || text[i]! < '1' || text[i]! > '9') return false;
+    i++;
+    digits();
   }
   if (text[i] === '.') {
     i++;
