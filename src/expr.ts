@@ -128,8 +128,19 @@ class Parser {
       if (!isString(keyTok) && !isIdent(keyTok)) {
         throw new ExprError(`invalid object key '${keyTok}' in: ${this.src}`);
       }
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        throw new ExprError(`forbidden property '${key}' in: ${this.src}`);
+      }
       this.expect(':');
-      obj[key] = this.parseExpr();
+      // defineProperty keeps '__proto__' (and every other key) an own property
+      // instead of letting assignment set the prototype; those keys are
+      // rejected above anyway.
+      Object.defineProperty(obj, key, {
+        value: this.parseExpr(),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
       if (this.peek() === ',') this.next();
       else break;
     }
@@ -219,6 +230,10 @@ class Parser {
       throw new ExprError(`cannot read '${key}' at '${trail}': the step's result was truncated at its maxResultChars; raise maxResultChars on that step (in: ${this.src})`);
     }
     if (typeof value !== 'object') return undefined;
+    // Only own properties: inherited ones (toString, hidden getters on a
+    // prototype, …) must read as undefined. Array indices and 'length' are
+    // own properties, so they still resolve.
+    if (!Object.hasOwn(value, key)) return undefined;
     return (value as Record<string | number, unknown>)[key];
   }
 }
