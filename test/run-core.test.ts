@@ -71,6 +71,13 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
+// One turn of the event loop: every promise callback already queued runs
+// first. Used after a cleanup signal so a run that settles without awaiting
+// cleanup has settled before the test looks. An ordering point, not a delay.
+function drainQueued(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 async function makeDir(files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'flowmcp-run-core-'));
   dirs.push(dir);
@@ -778,11 +785,13 @@ describe('runFlow MCP admission and pool lifecycle', () => {
   // A mocked downstream that lists a read-annotated tool and an unannotated
   // tool, records every call it receives, and closes only when released.
   // close() never resolves until the test releases it, so a run that does not
-  // await closeAll stays pending and the test can observe that.
+  // await closeAll stays pending and the test can observe that. closeCalled
+  // resolves the moment close() is entered: tests wait on it, never on a timer.
   interface MockClient {
     calls: string[];
     opened: () => number;
     closed: () => number;
+    closeCalled: Promise<void>;
     releaseClose: () => void;
     listTools: ReturnType<typeof vi.fn>;
     callTool: ReturnType<typeof vi.fn>;
@@ -792,10 +801,12 @@ describe('runFlow MCP admission and pool lifecycle', () => {
   function mockClient(): MockClient {
     const state = { calls: [] as string[], opened: 0, closed: 0 };
     const gate = deferred();
+    const entered = deferred();
     return {
       calls: state.calls,
       opened: () => state.opened,
       closed: () => state.closed,
+      closeCalled: entered.promise,
       releaseClose: () => gate.resolve(),
       connect: vi.fn(async () => {
         state.opened++;
@@ -809,6 +820,7 @@ describe('runFlow MCP admission and pool lifecycle', () => {
         return { content: [{ type: 'text', text: 'echoed' }] };
       }),
       close: vi.fn(async () => {
+        entered.resolve();
         // Count only when the close actually finishes.
         await gate.promise;
         state.closed++;
@@ -892,12 +904,21 @@ describe('runFlow MCP admission and pool lifecycle', () => {
       },
     );
     run.catch(() => {});
-    await new Promise((r) => setTimeout(r, 25));
-    expect(settled).toBe(false);
-    expect(client.closed()).toBe(0);
-    client.releaseClose();
-    expect(await run).toEqual({ text: 'echoed' });
-    expect(client.closed()).toBe(1);
+    try {
+      // Cleanup has begun (or the run settled early, which the assertions catch);
+      // then let anything already queued run, so a premature settlement shows.
+      await Promise.race([client.closeCalled, run.catch(() => {})]);
+      await drainQueued();
+      expect(client.close).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+      expect(client.closed()).toBe(0);
+      client.releaseClose();
+      expect(await run).toEqual({ text: 'echoed' });
+      expect(client.closed()).toBe(1);
+    } finally {
+      client.releaseClose();
+      await run.catch(() => {});
+    }
   });
 
   it('awaits closeAll on failure and keeps the rejection unsettled until cleanup finishes', async () => {
@@ -920,14 +941,21 @@ describe('runFlow MCP admission and pool lifecycle', () => {
         return e;
       },
     );
-    await new Promise((r) => setTimeout(r, 25));
-    expect(settled).toBe(false);
-    expect(client.closed()).toBe(0);
-    client.releaseClose();
-    const err = await run;
-    expect(err).toBeInstanceOf(FlowError);
-    expect((err as FlowError).message).toMatch(/downstream exploded/);
-    expect(client.closed()).toBe(1);
+    try {
+      await Promise.race([client.closeCalled, run]);
+      await drainQueued();
+      expect(client.close).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+      expect(client.closed()).toBe(0);
+      client.releaseClose();
+      const err = await run;
+      expect(err).toBeInstanceOf(FlowError);
+      expect((err as FlowError).message).toMatch(/downstream exploded/);
+      expect(client.closed()).toBe(1);
+    } finally {
+      client.releaseClose();
+      await run;
+    }
   });
 
   it('awaits closeAll on an unexpected pending result', async () => {
@@ -944,16 +972,19 @@ describe('runFlow MCP admission and pool lifecycle', () => {
       proposalText: 'p',
     })) as unknown as typeof engine.executeFlow);
     const closeGate = deferred();
+    const closing = deferred();
     const closeAll = vi.spyOn(pool.McpPool.prototype, 'closeAll').mockImplementation(async () => {
+      closing.resolve();
       await closeGate.promise;
     });
+    let run: Promise<unknown> | undefined;
     try {
       const dir = await makeDir({
         'a.flow.json5': mcpFlow('echo'),
         'servers.json5': `{ m: { command: 'node' } }`,
       });
       let settled = false;
-      const run = runFlow({ dir, flow: 'mcp_flow' }).then(
+      run = runFlow({ dir, flow: 'mcp_flow' }).then(
         () => {
           settled = true;
         },
@@ -962,7 +993,10 @@ describe('runFlow MCP admission and pool lifecycle', () => {
           return e;
         },
       );
-      await new Promise((r) => setTimeout(r, 25));
+      // The engine has returned pending and cleanup has begun (or the run
+      // settled early, which the assertions below catch). Never a timer.
+      await Promise.race([closing.promise, run]);
+      await drainQueued();
       expect(settled).toBe(false);
       expect(once).toHaveBeenCalledTimes(1);
       expect(closeAll).toHaveBeenCalledTimes(1);
@@ -973,6 +1007,10 @@ describe('runFlow MCP admission and pool lifecycle', () => {
       expect((err as Error).message).toMatch(/paused unexpectedly/);
       expect(once).toHaveBeenCalledTimes(1); // never resumed
     } finally {
+      // Let the run finish before the real engine and pool come back, so no
+      // work from this test can reach the next one.
+      closeGate.resolve();
+      await run;
       closeAll.mockRestore();
       once.mockRestore();
     }
