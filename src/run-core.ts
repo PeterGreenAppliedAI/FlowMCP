@@ -24,14 +24,15 @@
 //
 // Execution is one executeFlow call with a fresh McpPool(servers,{baseDir:dir}),
 // and closeAll is awaited in finally after the pool exists. A pending result
-// (a write gate) is unexpected here — the flow was checked read-only — so it
-// rejects rather than resuming. FlowError step ids and causes are preserved.
-// No stdout, no stdin, no process exit: diagnostics go to stderr only.
+// is unexpected here — the flow was checked read-only, and this runner has no
+// approval surface — so it rejects rather than resuming. FlowError step ids
+// and causes are preserved. No stdout, no stdin, no process exit: diagnostics
+// go to stderr only.
 
 import { checkAbsentSteps, checkServerRefs, flowEffects, loadFlows, loadServers } from './loader.js';
 import { executeFlow, FlowError } from './engine.js';
 import { McpPool } from './mcp-pool.js';
-import { checkRegistryCoverage, loadRegistry, REGISTRY_FILE, registryEntry } from './registry.js';
+import { checkRegistryCoverage, loadRegistry, REGISTRY_FILE } from './registry.js';
 import type { Flow } from './flow-schema.js';
 
 export interface RunFlowOptions {
@@ -47,6 +48,13 @@ export interface RunFlowOptions {
 export interface RunFlowResult {
   text: string;
   absent?: string[];
+}
+
+// Registry records come from JSON5, so they are plain objects whose inherited
+// Object.prototype names ('constructor', 'toString', …) would look like
+// entries under a plain `in`/read. Own properties only.
+function ownEntry<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
 export async function runFlow(options: RunFlowOptions): Promise<RunFlowResult> {
@@ -66,7 +74,10 @@ export async function runFlow(options: RunFlowOptions): Promise<RunFlowResult> {
 
   // 3. Promotion state (only with a registry).
   if (registry) {
-    const state = registryEntry(registry, flowName)!.state;
+    const state = ownEntry(registry, flowName)?.state;
+    if (state === undefined) {
+      throw new Error(`${REGISTRY_FILE}: flow '${flowName}' has no entry`);
+    }
     if (state === 'retired') {
       throw new Error(`flow '${flowName}' is 'retired' in ${REGISTRY_FILE} — retired flows never run`);
     }
@@ -95,13 +106,7 @@ export async function runFlow(options: RunFlowOptions): Promise<RunFlowResult> {
   // 6. One execution, then always close the pool.
   const pool = new McpPool(servers, { baseDir: dir });
   try {
-    // The engine's write gate is injected here (rather than through the public
-    // options) so an unexpected pause can be exercised hermetically: the
-    // runner then rejects instead of resuming — it has no approval surface.
-    const run = await executeFlow(flow, args, {
-      mcp: pool,
-      writeGate: injectedWriteGate(flowName),
-    });
+    const run = await executeFlow(flow, args, { mcp: pool });
     if (run.status === 'pending') {
       throw new FlowError(
         flow.steps[run.pending.stepIndex]?.id ?? 'pending',
@@ -114,20 +119,6 @@ export async function runFlow(options: RunFlowOptions): Promise<RunFlowResult> {
   }
 }
 
-// A test-visible seam for the unexpected-pending branch: tests populate this
-// map to simulate a gate on a flow the loader judged read-only. It is empty in
-// production, so no gate is ever injected there.
-const writeGates = new Map<string, Set<string>>();
-export function __simulateWriteGate(flowName: string, ids: string[]): void {
-  writeGates.set(flowName, new Set(ids));
-}
-export function __clearWriteGate(flowName: string): void {
-  writeGates.delete(flowName);
-}
-function injectedWriteGate(flowName: string): Set<string> | undefined {
-  return writeGates.get(flowName);
-}
-
 function convertInputs(flow: Flow, inputPairs: string[]): Record<string, unknown> {
   const args: Record<string, unknown> = {};
   for (const pair of inputPairs) {
@@ -138,7 +129,7 @@ function convertInputs(flow: Flow, inputPairs: string[]): Record<string, unknown
     const key = pair.slice(0, eq);
     const rest = pair.slice(eq + 1);
     if (key === '') throw new FlowError('input', `input '${pair}' has an empty key`);
-    const param = Object.prototype.hasOwnProperty.call(flow.input, key) ? flow.input[key] : undefined;
+    const param = ownEntry(flow.input, key);
     if (!param) {
       const valid = Object.keys(flow.input);
       throw new FlowError(
@@ -155,7 +146,9 @@ function convertInputs(flow: Flow, inputPairs: string[]): Record<string, unknown
 }
 
 // The string remainder is verbatim. Booleans accept only true/false. Numbers
-// must be finite JSON-number literals with no surrounding whitespace.
+// must be finite JSON-number literals with no surrounding whitespace. The
+// literal test is done by hand rather than with a RegExp: a JS regexp `$`
+// also matches before a trailing newline, which would accept '7\n'.
 function convertValue(key: string, type: 'string' | 'number' | 'boolean', rest: string): unknown {
   if (type === 'string') return rest;
   if (type === 'boolean') {
@@ -163,7 +156,7 @@ function convertValue(key: string, type: 'string' | 'number' | 'boolean', rest: 
     if (rest === 'false') return false;
     throw new FlowError('input', `parameter '${key}' must be true or false, got '${rest}'`);
   }
-  if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(rest)) {
+  if (!isJsonNumberLiteral(rest)) {
     throw new FlowError('input', `parameter '${key}' must be a JSON number, got '${rest}'`);
   }
   const value = Number(rest);
@@ -173,9 +166,38 @@ function convertValue(key: string, type: 'string' | 'number' | 'boolean', rest: 
   return value;
 }
 
+// RFC 8259 number: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
+// Every character is checked, so no whitespace (leading, trailing, newline)
+// can slip through.
+function isJsonNumberLiteral(text: string): boolean {
+  let i = 0;
+  const digits = (): number => {
+    const start = i;
+    while (i < text.length && text[i]! >= '0' && text[i]! <= '9') i++;
+    return i - start;
+  };
+  if (text[i] === '-') i++;
+  if (text[i] === '0') {
+    i++;
+  } else {
+    if (digits() === 0) return false;
+    if (text[i - 1] === '0') return false; // leading zero, e.g. '01'
+  }
+  if (text[i] === '.') {
+    i++;
+    if (digits() === 0) return false;
+  }
+  if (text[i] === 'e' || text[i] === 'E') {
+    i++;
+    if (text[i] === '+' || text[i] === '-') i++;
+    if (digits() === 0) return false;
+  }
+  return i === text.length;
+}
+
 function checkRequired(flow: Flow, args: Record<string, unknown>): void {
   for (const [key, param] of Object.entries(flow.input)) {
-    if (param.required && param.default === undefined && args[key] === undefined) {
+    if (param.required && param.default === undefined && !Object.prototype.hasOwnProperty.call(args, key)) {
       throw new FlowError('input', `missing required parameter '${key}'`);
     }
   }

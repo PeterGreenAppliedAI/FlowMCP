@@ -133,11 +133,11 @@ function coerceInput(flow: Flow, args: Record<string, unknown>): Record<string, 
   }
   const input: Record<string, unknown> = {};
   for (const [key, param] of Object.entries(declared)) {
-    // An explicitly supplied undefined is "not supplied" — the default applies.
-    const value =
-      Object.prototype.hasOwnProperty.call(args, key) && args[key] !== undefined
-        ? args[key]
-        : param.default;
+    // Own property only, then the existing nullish fallback: an absent,
+    // undefined or null value falls back to the default, as before; an
+    // inherited value on the argument object is never read.
+    const supplied = Object.prototype.hasOwnProperty.call(args, key) ? args[key] : undefined;
+    const value = supplied ?? param.default;
     if (value === undefined) {
       if (param.required) throw new FlowError('input', `missing required parameter '${key}'`);
       continue;

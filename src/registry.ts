@@ -117,14 +117,6 @@ export async function loadRegistry(dir: string): Promise<Registry | undefined> {
 // Fail closed both ways: a registry entry for a flow that doesn't exist is a
 // stale judgment; a flow file the registry doesn't mention is an unreviewed
 // flow in a directory that opted into review.
-//
-// Own properties only: a registry is a JSON5 record, and a plain `in` would
-// also match Object.prototype names (`constructor`, `toString`, …) — so a
-// flow named like one of those would look listed without an entry.
-export function registryEntry(registry: Registry, name: string): RegistryEntry | undefined {
-  return Object.prototype.hasOwnProperty.call(registry, name) ? registry[name] : undefined;
-}
-
 export function checkRegistryCoverage(registry: Registry, flowNames: string[]): void {
   const files = new Set(flowNames);
   for (const name of Object.keys(registry)) {
@@ -133,7 +125,7 @@ export function checkRegistryCoverage(registry: Registry, flowNames: string[]): 
     }
   }
   for (const name of flowNames) {
-    if (!Object.prototype.hasOwnProperty.call(registry, name)) {
+    if (!(name in registry)) {
       throw new Error(
         `${REGISTRY_FILE}: flow '${name}' is not listed — add it (state: 'candidate' until reviewed) or remove the flow file`,
       );

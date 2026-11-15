@@ -8,8 +8,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 //  - the HTTP boundary (global fetch), so no request leaves the process;
 //  - the downstream MCP client factory (createDownstreamClient), so the real
 //    McpPool admission check runs against a mocked client instead of a child.
-// The factory mock delegates to the real module for the cases that need a
-// real downstream (the mock MCP server fixture), keyed on the server name.
+// Every test that reaches the pool installs its own mocked client; the default
+// factory is the real one, so a test that forgets to mock still gets the real
+// transport rather than a silent fake.
 // ---------------------------------------------------------------------------
 const mocks = vi.hoisted(() => {
   const real = { createDownstreamClient: undefined as unknown };
@@ -25,11 +26,10 @@ vi.mock('../src/downstream.js', async (importOriginal) => {
   return { ...actual, createDownstreamClient: mocks.factory };
 });
 
-import { __clearWriteGate, __simulateWriteGate, runFlow } from '../src/run-core.js';
-import { FlowError } from '../src/engine.js';
+import { runFlow } from '../src/run-core.js';
+import { executeFlow, FlowError } from '../src/engine.js';
 import { loadServers } from '../src/loader.js';
 import { checkRegistryCoverage, REGISTRY_FILE } from '../src/registry.js';
-import { executeFlow } from '../src/engine.js';
 import { flowSchema } from '../src/flow-schema.js';
 
 // ---------------------------------------------------------------------------
@@ -41,11 +41,35 @@ const fetchMock = vi.fn();
 // override this with their own stub.
 vi.stubGlobal('fetch', fetchMock);
 
+const spies: Array<{ mockRestore: () => void }> = [];
+
 afterEach(async () => {
   mocks.factory.mockClear();
   fetchMock.mockReset();
+  while (spies.length) spies.pop()!.mockRestore();
   while (dirs.length) await rm(dirs.pop()!, { recursive: true, force: true });
 });
+
+// Capture stderr writes for the duration of one test; always restored.
+function captureStderr(): string[] {
+  const written: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+    written.push(String(chunk));
+    return true;
+  });
+  spies.push(spy);
+  return written;
+}
+
+// A gate that resolves only when released: used to prove that runFlow waits
+// for it (cleanup, execution) rather than racing ahead.
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 async function makeDir(files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'flowmcp-run-core-'));
@@ -66,9 +90,7 @@ function flow(name: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify(base);
 }
 
-// A read-only flow with a rich input schema: string, number, boolean,
-// defaulted and required parameters. Flows take at most 3 parameters, so the
-// conversion tests use two fixtures: one for the scalars, one for defaults.
+// A read-only flow with a rich input schema: string, number, boolean.
 const typedFlow = (): string =>
   JSON.stringify({
     name: 'typed',
@@ -176,19 +198,26 @@ describe('runFlow completion and failures', () => {
     expect((err as FlowError).stepId).toBe('output');
   });
 
-  it('rejects an unexpected pending result without resuming', async () => {
-    const dir = await makeDir({ 'a.flow.json5': flow('gate_flow') });
-    __simulateWriteGate('gate_flow', ['out']);
+  it('rejects an unexpected pending result and does not resume it', async () => {
+    // A write-capable flow is refused before execution, so a pending result is
+    // reachable here only if the engine returns pending for a flow the loader
+    // judged read-only. Mock the engine's single call: runFlow must reject
+    // with the paused step id and never call the engine again (no resume).
+    const engine = await import('../src/engine.js');
+    const once = vi.spyOn(engine, 'executeFlow').mockImplementation((async () => ({
+      status: 'pending' as const,
+      pending: { ctx: null, stepIndex: 0 },
+      proposalText: 'p',
+    })) as unknown as typeof engine.executeFlow);
     try {
-      const err = await runFlow({ dir, flow: 'gate_flow' }).then(
-        () => undefined,
-        (e: unknown) => e,
-      );
+      const dir = await makeDir({ 'a.flow.json5': flow('gate_flow') });
+      const err = await runFlow({ dir, flow: 'gate_flow' }).then(() => undefined, (e: unknown) => e);
       expect(err).toBeInstanceOf(FlowError);
       expect((err as FlowError).stepId).toBe('out');
       expect((err as FlowError).message).toMatch(/paused unexpectedly/);
+      expect(once).toHaveBeenCalledTimes(1);
     } finally {
-      __clearWriteGate('gate_flow');
+      once.mockRestore();
     }
   });
 });
@@ -215,12 +244,14 @@ describe('runFlow input conversion', () => {
     expect((await run(['s= pad '])).s).toBe(' pad ');
     expect((await run(['s=,,,'])).s).toBe(',,,');
     expect((await run(['s=a=b'])).s).toBe('a=b');
+    expect((await run(['s=true'])).s).toBe('true');
+    expect((await run(['s=1'])).s).toBe('1');
   });
 
   it('converts booleans strictly', async () => {
     expect(await run(['b=true'])).toMatchObject({ b: true });
     expect(await run(['b=false'])).toMatchObject({ b: false });
-    for (const bad of ['TRUE', 'True', '1', '0', 'yes', ' true', '', 'false ']) {
+    for (const bad of ['TRUE', 'True', '1', '0', 'yes', ' true', '', 'false ', 'true\n']) {
       const err = await failure([`b=${bad}`]);
       expect(err).toBeInstanceOf(FlowError);
       expect((err as FlowError).stepId).toBe('input');
@@ -232,12 +263,53 @@ describe('runFlow input conversion', () => {
     expect(await run(['n=-12'])).toMatchObject({ n: -12 });
     expect(await run(['n=1.5'])).toMatchObject({ n: 1.5 });
     expect(await run(['n=1e3'])).toMatchObject({ n: 1000 });
+    expect(await run(['n=1E+3'])).toMatchObject({ n: 1000 });
+    expect(await run(['n=1e-3'])).toMatchObject({ n: 0.001 });
     expect(await run(['n=-0.25'])).toMatchObject({ n: -0.25 });
-    for (const bad of ['', ' 1', '1 ', '+1', '01', '.5', '1.', '0x10', '1e999', 'Infinity', 'NaN', 'abc', '1,2']) {
+    for (const bad of [
+      '',
+      ' 1',
+      '1 ',
+      '7\n',
+      '\n7',
+      '1\n2',
+      '7\r',
+      '7\t',
+      '+1',
+      '01',
+      '.5',
+      '1.',
+      '1.e3',
+      '0x10',
+      '1e999',
+      '-1e999',
+      'Infinity',
+      '-Infinity',
+      'NaN',
+      'abc',
+      '1,2',
+      '1e',
+      '--1',
+    ]) {
       const err = await failure([`n=${bad}`]);
       expect(err).toBeInstanceOf(FlowError);
       expect((err as FlowError).stepId).toBe('input');
+      expect((err as FlowError).message).toMatch(/JSON number|finite number/);
     }
+  });
+
+  it("rejects input 'n=7\\n' at the flow boundary", async () => {
+    const dir = await makeDir({ 'a.flow.json5': typedFlow() });
+    fetchMock.mockResolvedValue(new Response('ok'));
+    const err = await runFlow({ dir, flow: 'typed', inputPairs: ['n=7\n'] }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(FlowError);
+    expect((err as FlowError).stepId).toBe('input');
+    expect((err as FlowError).message).toContain("got '7\n'");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mocks.factory).not.toHaveBeenCalled();
   });
 
   it('applies defaults and leaves optional inputs omitted', async () => {
@@ -250,14 +322,36 @@ describe('runFlow input conversion', () => {
   });
 
   it('checks missing required parameters without defaults before the engine runs', async () => {
-    const err = await failure([], defaultsFlow(), 'defaults');
+    const dir = await makeDir({ 'a.flow.json5': defaultsFlow() });
+    fetchMock.mockResolvedValue(new Response('ok'));
+    const err = await runFlow({ dir, flow: 'defaults' }).then(() => undefined, (e: unknown) => e);
     expect(err).toBeInstanceOf(FlowError);
     expect((err as FlowError).stepId).toBe('input');
     expect((err as FlowError).message).toContain("missing required parameter 'must'");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mocks.factory).not.toHaveBeenCalled();
+  });
+
+  it('checks a required inherited name (constructor) as missing before the engine runs', async () => {
+    const fixture = JSON.stringify({
+      name: 'proto_req',
+      description: 'WHEN TO USE: inherited required name.',
+      input: {
+        constructor: { type: 'string', description: 'required, no default', required: true },
+      },
+      steps: [{ id: 'out', kind: 'template', template: 'ran' }],
+      output: '{{steps.out}}',
+    });
+    const dir = await makeDir({ 'a.flow.json5': fixture });
+    const err = await runFlow({ dir, flow: 'proto_req' }).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(FlowError);
+    expect((err as FlowError).stepId).toBe('input');
+    expect((err as FlowError).message).toContain("missing required parameter 'constructor'");
+    expect(mocks.factory).not.toHaveBeenCalled();
   });
 
   it('rejects a pair with no = and an empty key', async () => {
-    for (const pair of ['s', '=ok']) {
+    for (const pair of ['s', '=ok', '']) {
       const err = await failure([pair]);
       expect(err).toBeInstanceOf(FlowError);
       expect((err as FlowError).stepId).toBe('input');
@@ -270,8 +364,8 @@ describe('runFlow input conversion', () => {
     expect((err as FlowError).message).toContain("duplicate parameter 's'");
   });
 
-  it('rejects unknown keys, including inherited/own prototype names', async () => {
-    for (const key of ['bogus', 'constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+  it('rejects unknown keys, including inherited prototype names', async () => {
+    for (const key of ['bogus', 'constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
       const err = await failure([`${key}=x`]);
       expect(err).toBeInstanceOf(FlowError);
       expect((err as FlowError).stepId).toBe('input');
@@ -293,28 +387,27 @@ describe('runFlow registry admission', () => {
   const states = ['candidate', 'reviewed', 'active', 'retired'] as const;
 
   it.each(states)('state %s without override', async (state) => {
+    const written = captureStderr();
     const dir = await makeDir({
       'a.flow.json5': flow('reg_flow'),
       [REGISTRY_FILE]: `{ reg_flow: { state: '${state}' } }`,
     });
-    const err = await runFlow({ dir, flow: 'reg_flow' }).then(() => undefined, (e: unknown) => e);
+    const res = await runFlow({ dir, flow: 'reg_flow' }).then(() => 'ok', (e: unknown) => e);
     if (state === 'active') {
-      expect(err).toBeUndefined();
+      expect(res).toBe('ok');
     } else {
-      expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toContain(`'${state}'`);
+      expect(res).toBeInstanceOf(Error);
+      expect((res as Error).message).toContain(`'${state}'`);
     }
+    // Only candidate/reviewed with the override note; no other state writes.
+    expect(written.join('')).toBe('');
   });
 
   it.each(states)('state %s with allowInactive', async (state) => {
+    const written = captureStderr();
     const dir = await makeDir({
       'a.flow.json5': flow('reg_flow'),
       [REGISTRY_FILE]: `{ reg_flow: { state: '${state}' } }`,
-    });
-    const written: string[] = [];
-    const note = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      written.push(String(chunk));
-      return true;
     });
     const res = await runFlow({ dir, flow: 'reg_flow', allowInactive: true }).then(
       () => 'ok',
@@ -323,14 +416,15 @@ describe('runFlow registry admission', () => {
     if (state === 'retired') {
       expect(res).toBeInstanceOf(Error);
       expect((res as Error).message).toContain("'retired'");
+      expect(written.join('')).toBe('');
     } else if (state === 'active') {
       expect(res).toBe('ok');
+      expect(written.join('')).toBe('');
     } else {
       expect(res).toBe('ok');
       const noteText = written.join('');
       expect(noteText).toContain(`'${state}'`);
       expect(noteText).toContain('allowInactive');
-      note.mockRestore();
     }
   });
 
@@ -339,25 +433,23 @@ describe('runFlow registry admission', () => {
     expect(await runFlow({ dir, flow: 'free_flow' })).toEqual({ text: 'ran free_flow' });
   });
 
-  it('uses own-property registry lookups: an inherited name does not count', async () => {
-    // 'constructor' is a valid snake_case flow name; without an entry it must
-    // look unlisted even though Object.prototype has that property.
+  it('uses own-property registry lookups: an empty registry never admits an unknown flow', async () => {
+    // No entry at all: the flow must be refused as unlisted before any run.
     const dir = await makeDir({
-      'a.flow.json5': flow('constructor'),
+      'a.flow.json5': flow('reg_flow'),
       [REGISTRY_FILE]: `{}`,
     });
-    const err = await runFlow({ dir, flow: 'constructor' }).then(() => undefined, (e: unknown) => e);
+    fetchMock.mockResolvedValue(new Response('ok'));
+    const err = await runFlow({ dir, flow: 'reg_flow' }).then(() => undefined, (e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/not listed/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('checkRegistryCoverage is own-property directed for inherited names', async () => {
-    // No entry at all: 'constructor' must be reported as unlisted.
-    expect(() => checkRegistryCoverage({}, ['constructor'])).toThrow(/not listed/);
-    // A real own entry is accepted, and an own entry for an unloaded flow is
-    // still refused.
-    const own = { constructor: { state: 'active' as const } };
-    expect(() => checkRegistryCoverage(own, ['constructor'])).not.toThrow();
+  it('checkRegistryCoverage reports a flow without an entry as unlisted', () => {
+    expect(() => checkRegistryCoverage({}, ['reg_flow'])).toThrow(/not listed/);
+    // A real entry is accepted, and an entry for an unloaded flow is refused.
+    expect(() => checkRegistryCoverage({ reg_flow: { state: 'active' as const } }, ['reg_flow'])).not.toThrow();
     expect(() => checkRegistryCoverage({ ghost: { state: 'active' as const } }, [])).toThrow(/does not match/);
   });
 
@@ -380,18 +472,37 @@ describe('runFlow registry admission', () => {
 // ---------------------------------------------------------------------------
 // Whole-directory validation before execution
 // ---------------------------------------------------------------------------
+// A flow whose first step is a visible probe: if execution started, fetch and
+// the downstream factory were called. Every validation test asserts neither.
+const probeFlow = (name: string): string =>
+  JSON.stringify({
+    name,
+    description: `WHEN TO USE: probe '${name}'.`,
+    input: {},
+    steps: [{ id: 'probe', kind: 'http_request', url: `http://x.test/${name}` }],
+    output: '{{steps.probe}}',
+  });
+
+function expectNoExecution(): void {
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(mocks.factory).not.toHaveBeenCalled();
+}
+
 describe('runFlow directory validation', () => {
   it('refuses a selected flow when an invalid sibling flow is present', async () => {
+    fetchMock.mockResolvedValue(new Response('ok'));
     const dir = await makeDir({
-      'a.flow.json5': flow('good'),
+      'a.flow.json5': probeFlow('good'),
       'b.flow.json5': `{ name: 'broken', steps: [] }`,
     });
     await expect(runFlow({ dir, flow: 'good' })).rejects.toThrow(/broken|invalid/);
+    expectNoExecution();
   });
 
   it('refuses a selected flow when a sibling calls an unknown server', async () => {
+    fetchMock.mockResolvedValue(new Response('ok'));
     const dir = await makeDir({
-      'a.flow.json5': flow('good'),
+      'a.flow.json5': probeFlow('good'),
       'b.flow.json5': JSON.stringify({
         name: 'orphan',
         description: 'WHEN TO USE: sibling.',
@@ -401,19 +512,23 @@ describe('runFlow directory validation', () => {
       }),
     });
     await expect(runFlow({ dir, flow: 'good' })).rejects.toThrow(/unknown MCP server 'ghost'/);
+    expectNoExecution();
   });
 
   it('refuses a selected flow when servers.json5 is invalid', async () => {
+    fetchMock.mockResolvedValue(new Response('ok'));
     const dir = await makeDir({
-      'a.flow.json5': flow('good'),
+      'a.flow.json5': probeFlow('good'),
       'servers.json5': `{ bad: { command: 42 } }`,
     });
     await expect(runFlow({ dir, flow: 'good' })).rejects.toThrow(/servers\.json5: invalid/);
+    expectNoExecution();
   });
 
   it('refuses a selected flow when an absence declaration is invalid', async () => {
+    fetchMock.mockResolvedValue(new Response('ok'));
     const dir = await makeDir({
-      'a.flow.json5': flow('good'),
+      'a.flow.json5': probeFlow('good'),
       'b.flow.json5': JSON.stringify({
         name: 'bad_absent',
         description: 'WHEN TO USE: sibling.',
@@ -421,27 +536,31 @@ describe('runFlow directory validation', () => {
         steps: [{ id: 'p', kind: 'http_request', method: 'POST', url: 'http://x.test/w', absent: [404] }],
         output: '{{steps.w}}',
       }),
-      'c.flow.json5': flow('good2'),
     });
     // The POST step is also write-capable; the absence check runs first.
     await expect(runFlow({ dir, flow: 'good' })).rejects.toThrow(/absent.*only for reads/);
+    expectNoExecution();
   });
 
   it('refuses a selected flow when registry coverage is incomplete', async () => {
+    fetchMock.mockResolvedValue(new Response('ok'));
     const dir = await makeDir({
-      'a.flow.json5': flow('good'),
-      'b.flow.json5': flow('unlisted'),
+      'a.flow.json5': probeFlow('good'),
+      'b.flow.json5': probeFlow('unlisted'),
       [REGISTRY_FILE]: `{ good: { state: 'active' } }`,
     });
     await expect(runFlow({ dir, flow: 'good' })).rejects.toThrow(/not listed/);
+    expectNoExecution();
   });
 
   it('refuses a selected flow when registry.json5 is a directory (read error)', async () => {
-    const dir = await makeDir({ 'a.flow.json5': flow('good') });
+    fetchMock.mockResolvedValue(new Response('ok'));
+    const dir = await makeDir({ 'a.flow.json5': probeFlow('good') });
     await mkdir(join(dir, REGISTRY_FILE));
     const err = await runFlow({ dir, flow: 'good' }).then(() => undefined, (e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as NodeJS.ErrnoException).code).toBe('EISDIR');
+    expectNoExecution();
   });
 });
 
@@ -449,22 +568,26 @@ describe('runFlow directory validation', () => {
 // Write refusal, including maps and both branch arms
 // ---------------------------------------------------------------------------
 describe('runFlow write refusal', () => {
+  // Every write flow starts with a visible probe read (or, for the map, a
+  // transform that produces values) before the write, so the assertions below
+  // can see whether execution started at all.
   const writeFlows: Record<string, string> = {
     direct_post: JSON.stringify({
       name: 'direct_post',
       description: 'WHEN TO USE: write.',
       input: {},
       steps: [
-        { id: 'read', kind: 'template', template: 'read first' },
+        { id: 'probe', kind: 'http_request', url: 'http://x.test/read-first' },
         { id: 'w', kind: 'http_request', method: 'POST', url: 'http://x.test/w' },
       ],
-      output: '{{steps.read}}',
+      output: '{{steps.probe}}',
     }),
     map_post: JSON.stringify({
       name: 'map_post',
       description: 'WHEN TO USE: write.',
       input: {},
       steps: [
+        { id: 'probe', kind: 'http_request', url: 'http://x.test/read-first' },
         { id: 'nums', kind: 'transform', expr: '[1, 2]' },
         {
           id: 'm',
@@ -476,67 +599,90 @@ describe('runFlow write refusal', () => {
       ],
       output: '{{steps.m}}',
     }),
+    // The branch condition selects the read arm; the write sits in then.
     branch_then: JSON.stringify({
       name: 'branch_then',
       description: 'WHEN TO USE: write.',
       input: {},
       steps: [
+        { id: 'probe', kind: 'http_request', url: 'http://x.test/read-first' },
         {
           id: 'br',
           kind: 'branch',
-          if: 'true',
+          if: 'false',
           then: [{ id: 'w', kind: 'http_request', method: 'POST', url: 'http://x.test/w' }],
           else: [{ id: 'r', kind: 'template', template: 'read' }],
         },
       ],
-      output: '{{steps.br.taken}}',
+      output: '{{steps.probe}}',
     }),
+    // The branch condition selects the read arm; the write sits in else.
     branch_else: JSON.stringify({
       name: 'branch_else',
       description: 'WHEN TO USE: write.',
       input: {},
       steps: [
+        { id: 'probe', kind: 'http_request', url: 'http://x.test/read-first' },
         {
           id: 'br',
           kind: 'branch',
-          if: 'false',
+          if: 'true',
           then: [{ id: 'r', kind: 'template', template: 'read' }],
           else: [{ id: 'w', kind: 'http_request', method: 'POST', url: 'http://x.test/w' }],
         },
       ],
-      output: '{{steps.br.taken}}',
+      output: '{{steps.probe}}',
     }),
     map_allowlisted: JSON.stringify({
       name: 'map_allowlisted',
       description: 'WHEN TO USE: write.',
       input: {},
       steps: [
-        { id: 'read', kind: 'template', template: 'read first' },
+        { id: 'probe', kind: 'http_request', url: 'http://x.test/read-first' },
+        { id: 'nums', kind: 'transform', expr: '[1, 2]' },
         {
           id: 'm',
           kind: 'map',
-          over: 'steps.read',
+          over: 'steps.nums',
           as: 'n',
           step: { kind: 'mcp_call', server: 'm', tool: 'write_it' },
         },
       ],
       output: '{{steps.m}}',
     }),
+    // The else arm holds the write; the condition selects then.
     branch_allowlisted: JSON.stringify({
       name: 'branch_allowlisted',
       description: 'WHEN TO USE: write.',
       input: {},
       steps: [
-        { id: 'read', kind: 'template', template: 'read first' },
+        { id: 'probe', kind: 'http_request', url: 'http://x.test/read-first' },
         {
           id: 'br',
           kind: 'branch',
-          if: 'false',
+          if: 'true',
           then: [{ id: 'r', kind: 'template', template: 'read' }],
           else: [{ id: 'w', kind: 'mcp_call', server: 'm', tool: 'write_it' }],
         },
       ],
-      output: '{{steps.read}}',
+      output: '{{steps.probe}}',
+    }),
+    // The then arm holds the allowlisted write; the condition selects else.
+    branch_then_allowlisted: JSON.stringify({
+      name: 'branch_then_allowlisted',
+      description: 'WHEN TO USE: write.',
+      input: {},
+      steps: [
+        { id: 'probe', kind: 'http_request', url: 'http://x.test/read-first' },
+        {
+          id: 'br',
+          kind: 'branch',
+          if: 'false',
+          then: [{ id: 'w', kind: 'mcp_call', server: 'm', tool: 'write_it' }],
+          else: [{ id: 'r', kind: 'template', template: 'read' }],
+        },
+      ],
+      output: '{{steps.probe}}',
     }),
   };
 
@@ -545,15 +691,13 @@ describe('runFlow write refusal', () => {
   for (const [name, text] of Object.entries(writeFlows)) {
     it(`refuses ${name} before any step`, async () => {
       fetchMock.mockResolvedValue(new Response('ok'));
-      const dir = await makeDir({
-        'a.flow.json5': text,
-      });
-      if (name.endsWith('allowlisted')) {
+      const dir = await makeDir({ 'a.flow.json5': text });
+      if (name.includes('allowlisted')) {
         await writeFile(join(dir, 'servers.json5'), serversWithAllow);
       }
       await expect(runFlow({ dir, flow: name })).rejects.toThrow(/write-capable.*flowmcp serve/);
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(mocks.factory).not.toHaveBeenCalled();
+      // The preceding read must not have run: no fetch, no downstream client.
+      expectNoExecution();
     });
   }
 
@@ -586,23 +730,28 @@ describe('runFlow write refusal', () => {
 // Real McpPool admission with a mocked downstream client
 // ---------------------------------------------------------------------------
 describe('runFlow MCP admission and pool lifecycle', () => {
-  // A mocked downstream that lists a read-annotated tool, an unannotated tool,
-  // and records every call it receives. It never spawns anything. Each
-  // instance carries its own call/close log; connect() counts as "opened".
+  // A mocked downstream that lists a read-annotated tool and an unannotated
+  // tool, records every call it receives, and closes only when released.
+  // close() never resolves until the test releases it, so a run that does not
+  // await closeAll stays pending and the test can observe that.
   interface MockClient {
     calls: string[];
     opened: () => number;
     closed: () => number;
+    releaseClose: () => void;
     listTools: ReturnType<typeof vi.fn>;
     callTool: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
   }
 
   function mockClient(): MockClient {
     const state = { calls: [] as string[], opened: 0, closed: 0 };
+    const gate = deferred();
     return {
       calls: state.calls,
       opened: () => state.opened,
       closed: () => state.closed,
+      releaseClose: () => gate.resolve(),
       connect: vi.fn(async () => {
         state.opened++;
       }),
@@ -615,6 +764,8 @@ describe('runFlow MCP admission and pool lifecycle', () => {
         return { content: [{ type: 'text', text: 'echoed' }] };
       }),
       close: vi.fn(async () => {
+        // Count only when the close actually finishes.
+        await gate.promise;
         state.closed++;
       }),
     } as MockClient & Record<string, unknown>;
@@ -634,6 +785,7 @@ describe('runFlow MCP admission and pool lifecycle', () => {
 
   it('never calls an unannotated, unattested, unallowed tool', async () => {
     const client = mockClient();
+    client.releaseClose();
     mocks.factory.mockReturnValueOnce(client);
     const dir = await makeDir({
       'a.flow.json5': mcpFlow('write_thing'),
@@ -644,11 +796,12 @@ describe('runFlow MCP admission and pool lifecycle', () => {
     expect((err as FlowError).stepId).toBe('c');
     expect((err as FlowError).message).toMatch(/not marked read-only/);
     expect(client.calls).toEqual([]);
-    expect(client.closed()).toBeGreaterThan(0);
+    expect(client.closed()).toBe(1);
   });
 
   it('calls a read-annotated tool through the pool and closes it', async () => {
     const client = mockClient();
+    client.releaseClose();
     mocks.factory.mockReturnValueOnce(client);
     const dir = await makeDir({
       'a.flow.json5': mcpFlow('echo'),
@@ -656,75 +809,141 @@ describe('runFlow MCP admission and pool lifecycle', () => {
     });
     expect(await runFlow({ dir, flow: 'mcp_flow' })).toEqual({ text: 'echoed' });
     expect(client.calls).toEqual(['echo']);
-    expect(client.closed()).toBeGreaterThan(0);
+    expect(client.closed()).toBe(1);
   });
 
   it('passes baseDir = dir to the pool (relative paths anchor to the flows dir)', async () => {
     const client = mockClient();
+    client.releaseClose();
     mocks.factory.mockReturnValueOnce(client);
     const dir = await makeDir({
       'a.flow.json5': mcpFlow('echo'),
       'servers.json5': `{ m: { command: 'node', args: ['relative/server.ts'] } }`,
     });
-    const written: string[] = [];
-    const note = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-      written.push(String(chunk));
-      return true;
-    });
+    const written = captureStderr();
     await runFlow({ dir, flow: 'mcp_flow' });
     const target = mocks.factory.mock.calls[0]![1] as { cwd?: string };
     expect(target.cwd).toBe(dir);
     // The pool warns about the missing relative path against that baseDir.
     expect(written.join('')).toContain(`relative to ${dir}`);
-    note.mockRestore();
   });
 
-  it('awaits closeAll on success, failure and an unexpected pending result', async () => {
-    // Success
-    {
-      const client = mockClient();
-      mocks.factory.mockReturnValueOnce(client);
+  it('awaits closeAll on success and keeps the run unsettled until cleanup finishes', async () => {
+    const client = mockClient();
+    mocks.factory.mockReturnValueOnce(client);
+    const dir = await makeDir({
+      'a.flow.json5': mcpFlow('echo'),
+      'servers.json5': `{ m: { command: 'node' } }`,
+    });
+    let settled = false;
+    const run = runFlow({ dir, flow: 'mcp_flow' }).then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e) => {
+        settled = true;
+        throw e;
+      },
+    );
+    run.catch(() => {});
+    await new Promise((r) => setTimeout(r, 25));
+    expect(settled).toBe(false);
+    expect(client.closed()).toBe(0);
+    client.releaseClose();
+    expect(await run).toEqual({ text: 'echoed' });
+    expect(client.closed()).toBe(1);
+  });
+
+  it('awaits closeAll on failure and keeps the rejection unsettled until cleanup finishes', async () => {
+    const client = mockClient();
+    client.callTool.mockImplementation(async () => {
+      throw new Error('downstream exploded');
+    });
+    mocks.factory.mockReturnValueOnce(client);
+    const dir = await makeDir({
+      'a.flow.json5': mcpFlow('echo'),
+      'servers.json5': `{ m: { command: 'node' } }`,
+    });
+    let settled = false;
+    const run = runFlow({ dir, flow: 'mcp_flow' }).then(
+      () => {
+        settled = true;
+      },
+      (e: unknown) => {
+        settled = true;
+        return e;
+      },
+    );
+    await new Promise((r) => setTimeout(r, 25));
+    expect(settled).toBe(false);
+    expect(client.closed()).toBe(0);
+    client.releaseClose();
+    const err = await run;
+    expect(err).toBeInstanceOf(FlowError);
+    expect((err as FlowError).message).toMatch(/downstream exploded/);
+    expect(client.closed()).toBe(1);
+  });
+
+  it('awaits closeAll on an unexpected pending result', async () => {
+    // A write-capable flow is refused before execution, so the runner's
+    // pending branch is reached only when the engine returns pending for a
+    // flow the loader judged read-only. This test mocks executeFlow for the
+    // runner's single call, then releases a deferred closeAll so the pending
+    // rejection stays unsettled until cleanup has finished.
+    const engine = await import('../src/engine.js');
+    const pool = await import('../src/mcp-pool.js');
+    const once = vi.spyOn(engine, 'executeFlow').mockImplementation((async () => ({
+      status: 'pending' as const,
+      pending: { ctx: null, stepIndex: 1 },
+      proposalText: 'p',
+    })) as unknown as typeof engine.executeFlow);
+    const closeGate = deferred();
+    const closeAll = vi.spyOn(pool.McpPool.prototype, 'closeAll').mockImplementation(async () => {
+      await closeGate.promise;
+    });
+    try {
       const dir = await makeDir({
         'a.flow.json5': mcpFlow('echo'),
         'servers.json5': `{ m: { command: 'node' } }`,
       });
-      await runFlow({ dir, flow: 'mcp_flow' });
-      expect(client.closed()).toBeGreaterThan(0);
+      let settled = false;
+      const run = runFlow({ dir, flow: 'mcp_flow' }).then(
+        () => {
+          settled = true;
+        },
+        (e: unknown) => {
+          settled = true;
+          return e;
+        },
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(settled).toBe(false);
+      expect(once).toHaveBeenCalledTimes(1);
+      expect(closeAll).toHaveBeenCalledTimes(1);
+      closeGate.resolve();
+      const err = await run;
+      expect(err).toBeInstanceOf(FlowError);
+      expect((err as FlowError).stepId).toBe('out');
+      expect((err as Error).message).toMatch(/paused unexpectedly/);
+      expect(once).toHaveBeenCalledTimes(1); // never resumed
+    } finally {
+      closeAll.mockRestore();
+      once.mockRestore();
     }
-    // Failure: the mock rejects the call, and close still runs
-    {
-      const client = mockClient();
-      client.callTool.mockImplementation(async () => {
-        throw new Error('downstream exploded');
-      });
-      mocks.factory.mockReturnValueOnce(client);
-      const dir = await makeDir({
-        'a.flow.json5': mcpFlow('echo'),
-        'servers.json5': `{ m: { command: 'node' } }`,
-      });
-      await expect(runFlow({ dir, flow: 'mcp_flow' })).rejects.toThrow(/downstream exploded/);
-      expect(client.closed()).toBeGreaterThan(0);
-    }
-    // Unexpected pending: a simulated gate pauses executeFlow, and the pool
-    // created by runFlow is still closed in finally.
-    {
-      const client = mockClient();
-      mocks.factory.mockReturnValueOnce(client);
-      const dir = await makeDir({
-        'a.flow.json5': mcpFlow('echo'),
-        'servers.json5': `{ m: { command: 'node' } }`,
-      });
-      __simulateWriteGate('mcp_flow', ['out']);
-      try {
-        await expect(runFlow({ dir, flow: 'mcp_flow' })).rejects.toThrow(/paused unexpectedly/);
-        // The gate paused after the call, but the client the pool opened
-        // lazily must still be closed by closeAll.
-        expect(client.calls).toEqual(['echo']);
-        expect(client.closed()).toBeGreaterThan(0);
-      } finally {
-        __clearWriteGate('mcp_flow');
-      }
-    }
+  });
+
+  it('does not create a pool when inputs are invalid', async () => {
+    const dir = await makeDir({
+      'a.flow.json5': mcpFlow('echo'),
+      'servers.json5': `{ m: { command: 'node' } }`,
+    });
+    const err = await runFlow({ dir, flow: 'mcp_flow', inputPairs: ['x=1'] }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(FlowError);
+    expect(mocks.factory).not.toHaveBeenCalled();
   });
 });
 
@@ -776,25 +995,45 @@ describe('coerceInput own properties', () => {
     }
   });
 
-  it('does not read an inherited value for a declared parameter', async () => {
-    const f = flowWithInput({
-      a: { type: 'string', description: 'a' },
-      constructor: { type: 'string', description: 'c' },
+  it('does not read an inherited value for a declared parameter (omits it)', async () => {
+    const f = flowWithInput({ a: { type: 'string', description: 'a' } });
+    // The argument object inherits 'a' (a getter on its prototype) but owns no
+    // 'a'. A prototype-chain read would hand 'inherited' to the engine.
+    const proto = Object.defineProperty({}, 'a', {
+      get: () => 'inherited',
+      enumerable: true,
     });
-    // An own 'constructor' key (from JSON.parse) is accepted; the declared
-    // 'a' must not pick a value off the prototype chain.
-    const args = JSON.parse('{"constructor": "ok"}') as Record<string, unknown>;
+    const args = Object.create(proto) as Record<string, unknown>;
     const run = await executeFlow(f, args);
     expect(run.status).toBe('complete');
     expect((run as { text: string }).text).toBe('');
   });
 
-  it('lets an own supplied value win over a default and applies a default otherwise', async () => {
-    const f = flowWithInput({
-      a: { type: 'string', description: 'a', default: 'dflt' },
+  it('does not read an inherited value, and applies an own default when omitted', async () => {
+    const f = flowWithInput({ a: { type: 'string', description: 'a', default: 'dflt' } });
+    const proto = Object.defineProperty({}, 'a', {
+      get: () => 'inherited',
+      enumerable: true,
     });
-    expect(await executeFlow(f, {})).toMatchObject({ status: 'complete', text: 'dflt' });
-    expect(await executeFlow(f, { a: 'own' })).toMatchObject({ status: 'complete', text: 'own' });
+    const args = Object.create(proto) as Record<string, unknown>;
+    expect(await executeFlow(f, args)).toMatchObject({ status: 'complete', text: 'dflt' });
+    // An own supplied value wins over the default.
+    const own: Record<string, unknown> = { a: 'own' };
+    expect(await executeFlow(f, own)).toMatchObject({ status: 'complete', text: 'own' });
+  });
+
+  it('keeps the nullish fallback: a null value falls back to a default or is omitted', async () => {
+    // Existing behavior preserved: an explicit null is "not supplied".
+    const withDefault = flowWithInput({ a: { type: 'string', description: 'a', default: 'dflt' } });
+    expect(await executeFlow(withDefault, { a: null })).toMatchObject({ status: 'complete', text: 'dflt' });
+    const optional = flowWithInput({ a: { type: 'string', description: 'a' } });
+    expect(await executeFlow(optional, { a: null })).toMatchObject({ status: 'complete', text: '' });
+  });
+
+  it('rejects a supplied value of the wrong type', async () => {
+    const f = flowWithInput({ a: { type: 'string', description: 'a' } });
+    const err = await executeFlow(f, { a: 3 }).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(FlowError);
+    expect((err as FlowError).stepId).toBe('input');
   });
 });
-
