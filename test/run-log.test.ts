@@ -148,6 +148,7 @@ describe('runFlow run logging', () => {
       'a.flow.json5': failingFlow('fail_flow'),
       [REGISTRY_FILE]: activeRegistry('fail_flow'),
     });
+    const before = Date.now();
     const err = await runFlow({ dir, flow: 'fail_flow' }).then(
       () => undefined,
       (e: unknown) => e,
@@ -161,6 +162,12 @@ describe('runFlow run logging', () => {
     expect(rec.flow).toBe('fail_flow');
     expect(rec.kind).toBe('run');
     expect(rec.ok).toBe(false);
+    // ISO timestamp, and the same instant the run happened.
+    expect(typeof rec.ts).toBe('string');
+    const ts = Date.parse(rec.ts as string);
+    expect(new Date(ts).toISOString()).toBe(rec.ts);
+    expect(ts).toBeGreaterThanOrEqual(before - 1000);
+    expect(ts).toBeLessThanOrEqual(Date.now() + 1000);
     const error = rec.error as string;
     expect(error).toContain(`Flow 'fail_flow'`);
     expect(error).toContain(`step 'bad'`);
@@ -216,6 +223,50 @@ describe('runFlow run logging', () => {
     expect(records).toHaveLength(1);
     expect(records[0]).not.toHaveProperty('absent');
     expect(records[0]).not.toHaveProperty('error');
+  });
+
+  it('records elapsed execution ms, excluding pool cleanup time', async () => {
+    // Cleanup is held for far longer than the run: execution is a mocked
+    // result, so the record's ms must reflect execution only.
+    const engine = await import('../src/engine.js');
+    const pool = await import('../src/mcp-pool.js');
+    const executeFlow = vi.spyOn(engine, 'executeFlow').mockImplementation((async () => ({
+      status: 'complete' as const,
+      text: 'ran ok_flow',
+    })) as unknown as typeof engine.executeFlow);
+    const closed = deferred();
+    const closeAll = vi.spyOn(pool.McpPool.prototype, 'closeAll').mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 120));
+      closed.resolve();
+    });
+    const appended = deferred();
+    const append = vi
+      .spyOn(await import('../src/registry.js'), 'appendLog')
+      .mockImplementation(async () => {
+        await closed.promise;
+        appended.resolve();
+      });
+    try {
+      const dir = await makeDir({
+        'a.flow.json5': flow('ok_flow'),
+        [REGISTRY_FILE]: activeRegistry('ok_flow'),
+      });
+      expect(await runFlow({ dir, flow: 'ok_flow' })).toEqual({ text: 'ran ok_flow' });
+      expect(executeFlow).toHaveBeenCalledTimes(1);
+      expect(append).toHaveBeenCalledTimes(1);
+      expect(closed.promise).toBeInstanceOf(Promise);
+      const arg = (append.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+      expect(typeof arg.ms).toBe('number');
+      // Execution was instantaneous (mocked); the 120 ms cleanup is excluded.
+      expect(arg.ms as number).toBeLessThan(100);
+      expect(arg.ms as number).toBeGreaterThanOrEqual(0);
+    } finally {
+      closed.resolve();
+      appended.resolve();
+      executeFlow.mockRestore();
+      closeAll.mockRestore();
+      append.mockRestore();
+    }
   });
 
   it('appends one record per run', async () => {
@@ -398,6 +449,32 @@ describe('runFlow append failures', () => {
     // The append error never replaces the flow failure.
     expect((err as Error).message).not.toContain('disk full');
     expect(written.join('')).toContain('registry log append failed: disk full');
+  });
+
+  it('preserves the exact mocked execution rejection when the append fails', async () => {
+    const written = captureStderr();
+    await mockAppend();
+    const engine = await import('../src/engine.js');
+    const thrown = new FlowError('mocked_step', 'known mocked cause');
+    const executeFlow = vi.spyOn(engine, 'executeFlow').mockImplementation((async () => {
+      throw thrown;
+    }) as unknown as typeof engine.executeFlow);
+    try {
+      const dir = await makeDir({
+        'a.flow.json5': flow('mock_fail'),
+        [REGISTRY_FILE]: activeRegistry('mock_fail'),
+      });
+      const err = await runFlow({ dir, flow: 'mock_fail' }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      // Same object identity: no replacement error, no wrapping.
+      expect(err).toBe(thrown);
+      expect(err).toBeInstanceOf(FlowError);
+      expect(written.join('')).toContain('registry log append failed: disk full');
+    } finally {
+      executeFlow.mockRestore();
+    }
   });
 
   it('awaits the append before settling, on success and on failure', async () => {

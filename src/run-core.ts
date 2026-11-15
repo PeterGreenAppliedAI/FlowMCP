@@ -35,7 +35,8 @@
 // Refusals before execution (load/lookup/coverage/state/write/input) and the
 // unexpected-pending refusal never log. A failed append is caught on its own,
 // diagnosed on stderr, and never changes the execution result; logging is
-// awaited after closeAll, before the run settles.
+// awaited after closeAll, before the run settles. The record's `ms` is elapsed
+// execution time, captured as executeFlow settles and before pool cleanup.
 
 import { checkAbsentSteps, checkServerRefs, flowEffects, loadFlows, loadServers } from './loader.js';
 import { executeFlow, FlowError } from './engine.js';
@@ -141,19 +142,24 @@ export async function runFlow(options: RunFlowOptions): Promise<RunFlowResult> {
   let run: Awaited<ReturnType<typeof executeFlow>> | undefined;
   let completed: { text: string; absent?: string[] } | undefined;
   let failed: string | undefined;
+  let ms: number | undefined;
   try {
     try {
       run = await executeFlow(flow, args, { mcp: pool });
+      // Elapsed EXECUTION time only: captured as execution settles, before the
+      // pool cleanup below, so cleanup time never inflates the record.
+      ms = Date.now() - startedAt;
       if (run.status === 'complete') {
         completed = run.absent?.length ? { text: run.text, absent: run.absent } : { text: run.text };
       }
     } catch (e) {
+      ms = Date.now() - startedAt;
       failed = flowFailureDetail(flowName, e);
       throw e;
     }
   } finally {
     await pool.closeAll();
-    if (completed || failed) await recordRun(dir, registry, flowName, startedAt, completed, failed);
+    if (completed || failed) await recordRun(dir, registry, flowName, ms!, completed, failed);
   }
 
   if (completed) return completed;
@@ -181,7 +187,7 @@ async function recordRun(
   dir: string,
   registry: Registry | undefined,
   flowName: string,
-  startedAt: number,
+  ms: number | undefined,
   completed: { text: string; absent?: string[] } | undefined,
   failed: string | undefined,
 ): Promise<void> {
@@ -192,7 +198,7 @@ async function recordRun(
       flow: flowName,
       kind: 'run',
       ok: failed === undefined,
-      ms: Date.now() - startedAt,
+      ms,
       ...(failed ? { error: failed } : {}),
       ...(completed?.absent?.length ? { absent: completed.absent } : {}),
     });
