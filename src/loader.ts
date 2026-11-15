@@ -69,8 +69,13 @@ export async function loadServers(dir: string): Promise<Record<string, ServerCon
   let text: string;
   try {
     text = await readFile(join(dir, 'servers.json5'), 'utf8');
-  } catch {
-    return {};
+  } catch (e) {
+    // Absent servers.json5 = no downstream servers; any other read failure
+    // (EISDIR for a directory named servers.json5, EACCES, ...) is a real
+    // error and must not silently look like "no servers" (same rule as
+    // loadRegistry).
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw e;
   }
   let raw: unknown;
   try {
