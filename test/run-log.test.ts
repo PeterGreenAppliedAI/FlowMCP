@@ -225,47 +225,102 @@ describe('runFlow run logging', () => {
     expect(records[0]).not.toHaveProperty('error');
   });
 
-  it('records elapsed execution ms, excluding pool cleanup time', async () => {
-    // Cleanup is held for far longer than the run: execution is a mocked
-    // result, so the record's ms must reflect execution only.
-    const engine = await import('../src/engine.js');
-    const pool = await import('../src/mcp-pool.js');
-    const executeFlow = vi.spyOn(engine, 'executeFlow').mockImplementation((async () => ({
-      status: 'complete' as const,
-      text: 'ran ok_flow',
-    })) as unknown as typeof engine.executeFlow);
-    const closed = deferred();
-    const closeAll = vi.spyOn(pool.McpPool.prototype, 'closeAll').mockImplementation(async () => {
-      await new Promise((r) => setTimeout(r, 120));
-      closed.resolve();
-    });
-    const appended = deferred();
-    const append = vi
-      .spyOn(await import('../src/registry.js'), 'appendLog')
-      .mockImplementation(async () => {
-        await closed.promise;
-        appended.resolve();
-      });
+  it('records exact execution ms, excluding pool cleanup time', async () => {
+    // Deterministic: the clock is faked, so execution and cleanup are advanced
+    // by exact, distinct amounts. The mocked execution advances the clock by
+    // EXEC_MS as it settles, and the mocked cleanup advances it by CLEANUP_MS.
+    // The record must carry EXEC_MS alone — any cleanup time, or a hard-coded
+    // zero, would fail the exact assertion.
+    const EXEC_MS = 37;
+    const CLEANUP_MS = 500;
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-01-02T03:04:05.000Z') });
+    let appended: { arg: Record<string, unknown> } | undefined;
     try {
-      const dir = await makeDir({
-        'a.flow.json5': flow('ok_flow'),
-        [REGISTRY_FILE]: activeRegistry('ok_flow'),
+      const engine = await import('../src/engine.js');
+      const pool = await import('../src/mcp-pool.js');
+      const executeFlow = vi.spyOn(engine, 'executeFlow').mockImplementation((async () => {
+        vi.advanceTimersByTime(EXEC_MS);
+        return { status: 'complete' as const, text: 'ran ok_flow' };
+      }) as unknown as typeof engine.executeFlow);
+      let closed = false;
+      const closeAll = vi.spyOn(pool.McpPool.prototype, 'closeAll').mockImplementation(async () => {
+        vi.advanceTimersByTime(CLEANUP_MS);
+        closed = true;
       });
-      expect(await runFlow({ dir, flow: 'ok_flow' })).toEqual({ text: 'ran ok_flow' });
-      expect(executeFlow).toHaveBeenCalledTimes(1);
-      expect(append).toHaveBeenCalledTimes(1);
-      expect(closed.promise).toBeInstanceOf(Promise);
-      const arg = (append.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
-      expect(typeof arg.ms).toBe('number');
-      // Execution was instantaneous (mocked); the 120 ms cleanup is excluded.
-      expect(arg.ms as number).toBeLessThan(100);
-      expect(arg.ms as number).toBeGreaterThanOrEqual(0);
+      const append = vi
+        .spyOn(await import('../src/registry.js'), 'appendLog')
+        .mockImplementation(async (_dir: string, record: unknown) => {
+          // Cleanup finished before logging: the exclusion is the code's job,
+          // not an artefact of the mock being called too early.
+          expect(closed).toBe(true);
+          appended = { arg: record as Record<string, unknown> };
+        });
+      try {
+        const dir = await makeDir({
+          'a.flow.json5': flow('ok_flow'),
+          [REGISTRY_FILE]: activeRegistry('ok_flow'),
+        });
+        expect(await runFlow({ dir, flow: 'ok_flow' })).toEqual({ text: 'ran ok_flow' });
+        expect(executeFlow).toHaveBeenCalledTimes(1);
+        expect(append).toHaveBeenCalledTimes(1);
+        expect(appended).toBeDefined();
+        expect(appended!.arg.ms).toBe(EXEC_MS);
+        // ts is taken after cleanup, so the clock has advanced by both parts.
+        expect(appended!.arg.ts).toBe('2026-01-02T03:04:05.537Z');
+      } finally {
+        executeFlow.mockRestore();
+        closeAll.mockRestore();
+        append.mockRestore();
+      }
     } finally {
-      closed.resolve();
-      appended.resolve();
-      executeFlow.mockRestore();
-      closeAll.mockRestore();
-      append.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('records exact execution ms on a mocked execution failure too', async () => {
+    const EXEC_MS = 23;
+    const CLEANUP_MS = 400;
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-02-03T04:05:06.000Z') });
+    try {
+      const engine = await import('../src/engine.js');
+      const pool = await import('../src/mcp-pool.js');
+      const thrown = new FlowError('boom', 'mocked cause');
+      const executeFlow = vi.spyOn(engine, 'executeFlow').mockImplementation((async () => {
+        vi.advanceTimersByTime(EXEC_MS);
+        throw thrown;
+      }) as unknown as typeof engine.executeFlow);
+      const closeAll = vi.spyOn(pool.McpPool.prototype, 'closeAll').mockImplementation(async () => {
+        vi.advanceTimersByTime(CLEANUP_MS);
+      });
+      let arg: Record<string, unknown> | undefined;
+      const append = vi
+        .spyOn(await import('../src/registry.js'), 'appendLog')
+        .mockImplementation(async (_dir: string, record: unknown) => {
+          arg = record as Record<string, unknown>;
+        });
+      try {
+        const dir = await makeDir({
+          'a.flow.json5': flow('mock_fail'),
+          [REGISTRY_FILE]: activeRegistry('mock_fail'),
+        });
+        const err = await runFlow({ dir, flow: 'mock_fail' }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(err).toBe(thrown);
+        expect(append).toHaveBeenCalledTimes(1);
+        expect(arg!.ok).toBe(false);
+        // Only ms is execution-only; ts is taken when the record is built,
+        // after cleanup, so the clock has advanced by both parts.
+        expect(arg!.ms).toBe(EXEC_MS);
+        expect(arg!.ts).toBe('2026-02-03T04:05:06.423Z');
+      } finally {
+        executeFlow.mockRestore();
+        closeAll.mockRestore();
+        append.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
