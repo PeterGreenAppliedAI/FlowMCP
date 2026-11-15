@@ -28,12 +28,22 @@
 // approval surface — so it rejects rather than resuming. FlowError step ids
 // and causes are preserved. No stdout, no stdin, no process exit: diagnostics
 // go to stderr only.
+//
+// Best-effort run logging (same record shape as the server's recordRun, built
+// here without importing server.ts): with a registry, a completed execution or
+// an exception from execution appends ONE 'run' record to registry-log.jsonl.
+// Refusals before execution (load/lookup/coverage/state/write/input) and the
+// unexpected-pending refusal never log. A failed append is caught on its own,
+// diagnosed on stderr, and never changes the execution result; logging is
+// awaited after closeAll, before the run settles. The record's `ms` is elapsed
+// execution time, captured as executeFlow settles and before pool cleanup.
 
 import { checkAbsentSteps, checkServerRefs, flowEffects, loadFlows, loadServers } from './loader.js';
 import { executeFlow, FlowError } from './engine.js';
 import { McpPool } from './mcp-pool.js';
-import { checkRegistryCoverage, loadRegistry, REGISTRY_FILE } from './registry.js';
+import { appendLog, checkRegistryCoverage, loadRegistry, REGISTRY_FILE } from './registry.js';
 import type { Flow } from './flow-schema.js';
+import type { Registry } from './registry.js';
 
 export interface RunFlowOptions {
   /** The resolved directory supplied by the caller (loaders read it as-is). */
@@ -124,19 +134,78 @@ export async function runFlow(options: RunFlowOptions): Promise<RunFlowResult> {
   const args = convertInputs(flow, inputPairs);
   checkRequired(flow, args);
 
-  // 6. One execution, then always close the pool.
+  // 6. One execution, then always close the pool. Only a completed result or
+  // an exception from executeFlow itself becomes a run record; the pending
+  // refusal (below, outside the execution boundary) does not.
   const pool = new McpPool(servers, { baseDir: dir });
+  const startedAt = Date.now();
+  let run: Awaited<ReturnType<typeof executeFlow>> | undefined;
+  let completed: { text: string; absent?: string[] } | undefined;
+  let failed: string | undefined;
+  let ms: number | undefined;
   try {
-    const run = await executeFlow(flow, args, { mcp: pool });
-    if (run.status === 'pending') {
-      throw new FlowError(
-        flow.steps[run.pending.stepIndex]?.id ?? 'pending',
-        `flow '${flowName}' paused unexpectedly at a write gate — the runner was checked read-only; refusing to resume`,
-      );
+    try {
+      run = await executeFlow(flow, args, { mcp: pool });
+      // Elapsed EXECUTION time only: captured as execution settles, before the
+      // pool cleanup below, so cleanup time never inflates the record.
+      ms = Date.now() - startedAt;
+      if (run.status === 'complete') {
+        completed = run.absent?.length ? { text: run.text, absent: run.absent } : { text: run.text };
+      }
+    } catch (e) {
+      ms = Date.now() - startedAt;
+      failed = flowFailureDetail(flowName, e);
+      throw e;
     }
-    return run.absent?.length ? { text: run.text, absent: run.absent } : { text: run.text };
   } finally {
     await pool.closeAll();
+    if (completed || failed) await recordRun(dir, registry, flowName, ms!, completed, failed);
+  }
+
+  if (completed) return completed;
+  // Unexpected pending: not a run record — the runner refuses to resume.
+  if (!run || run.status !== 'pending') throw new Error('unreachable: execution settled without a result');
+  throw new FlowError(
+    flow.steps[run.pending.stepIndex]?.id ?? 'pending',
+    `flow '${flowName}' paused unexpectedly at a write gate — the runner was checked read-only; refusing to resume`,
+  );
+}
+
+// Failure diagnostic naming the flow, the available step and the cause. The
+// step is only a top-level id: an absent/mocked pending carries none here, so
+// it is omitted rather than invented. FlowError is preserved, never replaced.
+function flowFailureDetail(flowName: string, e: unknown): string {
+  const cause = e instanceof Error ? e.message : String(e);
+  return e instanceof FlowError && typeof e.stepId === 'string'
+    ? `Flow '${flowName}' failed at step '${e.stepId}': ${cause}`
+    : `Flow '${flowName}' failed: ${cause}`;
+}
+
+// Best-effort: a log write failure must never fail the run. No registry means
+// no log file is created.
+async function recordRun(
+  dir: string,
+  registry: Registry | undefined,
+  flowName: string,
+  ms: number | undefined,
+  completed: { text: string; absent?: string[] } | undefined,
+  failed: string | undefined,
+): Promise<void> {
+  if (!registry) return;
+  try {
+    await appendLog(dir, {
+      ts: new Date().toISOString(),
+      flow: flowName,
+      kind: 'run',
+      ok: failed === undefined,
+      ms,
+      ...(failed ? { error: failed } : {}),
+      ...(completed?.absent?.length ? { absent: completed.absent } : {}),
+    });
+  } catch (e) {
+    process.stderr.write(
+      `flowmcp: registry log append failed: ${e instanceof Error ? e.message : e}\n`,
+    );
   }
 }
 
