@@ -118,8 +118,12 @@ async function runSteps(
 
 function coerceInput(flow: Flow, args: Record<string, unknown>): Record<string, unknown> {
   const declared = flow.input;
+  // Own properties only: Object.prototype names (constructor, toString, …)
+  // are not declared parameters, and inherited names on an argument object
+  // are not arguments. Both 'in' and plain reads would consult the prototype
+  // chain (and would accept an inherited '__proto__').
   for (const key of Object.keys(args)) {
-    if (!(key in declared)) {
+    if (!Object.prototype.hasOwnProperty.call(declared, key)) {
       const valid = Object.keys(declared);
       throw new FlowError(
         'input',
@@ -129,7 +133,11 @@ function coerceInput(flow: Flow, args: Record<string, unknown>): Record<string, 
   }
   const input: Record<string, unknown> = {};
   for (const [key, param] of Object.entries(declared)) {
-    const value = args[key] ?? param.default;
+    // An explicitly supplied undefined is "not supplied" — the default applies.
+    const value =
+      Object.prototype.hasOwnProperty.call(args, key) && args[key] !== undefined
+        ? args[key]
+        : param.default;
     if (value === undefined) {
       if (param.required) throw new FlowError('input', `missing required parameter '${key}'`);
       continue;
