@@ -2,6 +2,7 @@
 // The `flowmcp` CLI — one entry point for the whole loop:
 //
 //   flowmcp serve    [--flows <dir>]        serve flows as MCP tools over stdio (default)
+//   flowmcp run      <flow> [--flows <dir>] run ONE read-only flow, exit 0/1
 //   flowmcp validate [--flows <dir>]        check flows + servers + registry, exit 0/1
 //   flowmcp status   [--flows <dir>]        registry health + nominations
 //   flowmcp explain  [--flows <dir>]        print a routing preamble for LLM hosts
@@ -23,6 +24,8 @@ const USAGE = `flowmcp — workflows are the tools
   flowmcp --version                          print the package version and exit
 
   flowmcp serve    [--flows <dir>]           serve flows as MCP tools over stdio (default)
+  flowmcp run      <flow> [--flows <dir>] [--input k=v]... [--json] [--allow-inactive]
+                                             run one read-only flow locally, exit 0/1 (see flowmcp run --help)
   flowmcp validate [--flows <dir>]           check flows + servers.json5 + registry.json5, exit 0/1
   flowmcp status   [--flows <dir>]           registry health and advisory nominations
   flowmcp explain  [--flows <dir>]           print a routing preamble for LLM hosts
@@ -76,6 +79,17 @@ async function main(): Promise<void> {
       process.argv.splice(2, 1);
       await import('./server.js');
       return;
+    case 'run': {
+      // runCli settles before returning: pool cleanup and run logging are
+      // awaited inside the runner, and runCli owns its own diagnostics, so the
+      // catch below never prints a second copy of a run failure. The module is
+      // imported before argv is spliced: runCli is then handed the remaining
+      // tokens explicitly.
+      const runModule = await import('./run.js');
+      process.argv.splice(2, 1);
+      await runModule.runCli(process.argv.slice(2));
+      return;
+    }
     case 'author':
       process.argv.splice(2, 1);
       await (await import('./author.js')).authorCli();
@@ -119,6 +133,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
+  // runCli has already diagnosed a run failure (and set the exit code); it
+  // does not rethrow. This catch is for every other command's startup errors.
   process.stderr.write(`flowmcp: ${e instanceof Error ? e.message : e}\n`);
   process.exit(1);
 });
