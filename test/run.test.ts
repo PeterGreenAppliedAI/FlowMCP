@@ -1,3 +1,4 @@
+import { basename, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -327,7 +328,7 @@ describe('runCli directory precedence', () => {
     capture();
     process.env.FLOWMCP_FLOWS_DIR = '/from-env';
     await runCli(['greet', '--flows', '/from-flag']);
-    expect(runner.runFlow.mock.calls[0]![0].dir).toBe('/from-flag');
+    expect(runner.runFlow.mock.calls[0]![0].dir).toBe(resolve('/from-flag'));
   });
 
   it('falls back to a nonempty FLOWMCP_FLOWS_DIR', async () => {
@@ -335,7 +336,7 @@ describe('runCli directory precedence', () => {
     capture();
     process.env.FLOWMCP_FLOWS_DIR = '/from-env';
     await runCli(['greet']);
-    expect(runner.runFlow.mock.calls[0]![0].dir).toBe('/from-env');
+    expect(runner.runFlow.mock.calls[0]![0].dir).toBe(resolve('/from-env'));
   });
 
   it('falls back to the package ../flows dir when the env var is empty', async () => {
@@ -344,7 +345,7 @@ describe('runCli directory precedence', () => {
     process.env.FLOWMCP_FLOWS_DIR = '';
     await runCli(['greet']);
     const dir = runner.runFlow.mock.calls[0]![0].dir as string;
-    expect(dir.endsWith('/flows')).toBe(true);
+    expect(basename(dir)).toBe('flows');
     expect(dir.includes('node_modules')).toBe(false);
   });
 });

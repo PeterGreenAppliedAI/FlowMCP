@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { projectRoot } from './helpers.js';
 
@@ -20,6 +21,9 @@ let postHits = 0;
 // Absolute path to tsx's loader, so a spawned MCP child (whose cwd is the
 // flows dir, not the repo) can still resolve it without a network install.
 const tsxLoader = join(dirname(createRequire(import.meta.url).resolve('tsx')), 'loader.mjs');
+// Node's --import expects a module specifier or URL; on Windows an absolute
+// path with backslashes is not a valid specifier, so hand it a file URL.
+const tsxLoaderUrl = pathToFileURL(tsxLoader).href;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -72,7 +76,7 @@ function runCli(
   opts: { cwd?: string; env?: Record<string, string | undefined> } = {},
 ): Promise<Result> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ['--import', tsxLoader, join(projectRoot, 'src/cli.ts'), ...args], {
+    const child = spawn(process.execPath, ['--import', tsxLoaderUrl, join(projectRoot, 'src/cli.ts'), ...args], {
       cwd: opts.cwd ?? projectRoot,
       env: { ...process.env, ...opts.env },
     });
@@ -332,7 +336,7 @@ describe('flowmcp run end to end', () => {
     await writeFile(join(dir, 'bin', 'mock-mcp.ts'), await readFile(join(projectRoot, 'test/fixtures/mock-mcp.ts')));
     await writeFile(
       join(dir, 'servers.json5'),
-      `{ mock: { command: 'node', args: ['--import', '${tsxLoader}', './bin/mock-mcp.ts'] } }`,
+      `{ mock: { command: 'node', args: ['--import', '${tsxLoaderUrl}', './bin/mock-mcp.ts'] } }`,
     );
     await writeFile(
       join(dir, 'a.flow.json5'),
@@ -415,7 +419,7 @@ describe('flowmcp run directory precedence', () => {
     expect(res.code).toBe(1);
     const parsed = JSON.parse(res.stdout) as { error: { message: string } };
     // The diagnostic names the package's flows dir, not the temp cwd.
-    expect(parsed.error.message).toContain(`${projectRoot.replace(/\/$/, '')}/flows`);
+    expect(parsed.error.message).toContain(`${projectRoot.replace(/[/\\]$/, '')}${sep}flows`);
     expect(parsed.error.message).not.toContain(otherCwd);
   });
 });
