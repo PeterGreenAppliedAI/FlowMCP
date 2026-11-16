@@ -176,10 +176,16 @@ export async function runCli(argv: string[] = process.argv.slice(3)): Promise<vo
   }
 
   if (parsed.usageError !== undefined) {
-    const diagnostic = `flowmcp run: ${parsed.usageError}\n\n${RUN_USAGE}`;
-    process.stderr.write(diagnostic);
+    // Name the requested flow in the diagnosis whenever one was given, so a
+    // usage failure is attributable just like a run failure; it is null (and
+    // the message stays bare) only when no flow was supplied.
+    const message =
+      parsed.flow === undefined
+        ? parsed.usageError
+        : `flow '${parsed.flow}': ${parsed.usageError}`;
+    process.stderr.write(`flowmcp run: ${message}\n\n${RUN_USAGE}`);
     if (parsed.json) {
-      process.stdout.write(`${JSON.stringify({ flow: parsed.flow ?? null, ok: false, error: { step: null, message: parsed.usageError } })}\n`);
+      process.stdout.write(`${JSON.stringify({ flow: parsed.flow ?? null, ok: false, error: { step: null, message } })}\n`);
     }
     process.exitCode = 1;
     return;

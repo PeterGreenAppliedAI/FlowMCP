@@ -179,9 +179,12 @@ describe('runCli usage errors', () => {
       // the one permitted stdout write.
       if (argv.includes('--json')) {
         const option = argv.includes('--flows') ? '--flows' : '--input';
+        const message = `option '${option}' requires a value`;
         expect(got.stdout).toBe(
-          `${JSON.stringify({ flow: argv[0] === 'greet' ? 'greet' : null, ok: false, error: { step: null, message: `option '${option}' requires a value` } })}\n`,
+          `${JSON.stringify({ flow: argv[0] === 'greet' ? 'greet' : null, ok: false, error: { step: null, message: argv[0] === 'greet' ? `flow 'greet': ${message}` : message } })}\n`,
         );
+        // The stderr diagnosis names the requested flow too.
+        if (argv[0] === 'greet') expect(got.stderr).toContain("flow 'greet'");
       } else {
         expect(got.stdout).toBe('');
       }
@@ -194,7 +197,8 @@ describe('runCli usage errors', () => {
   it('rejects an empty --flows directory and a repeated --flows', async () => {
     const got = capture();
     await runCli(['greet', '--flows', '', '--json']);
-    expect(JSON.parse(got.stdout)).toEqual({ flow: 'greet', ok: false, error: { step: null, message: "option '--flows' requires a nonempty directory" } });
+    expect(JSON.parse(got.stdout)).toEqual({ flow: 'greet', ok: false, error: { step: null, message: "flow 'greet': option '--flows' requires a nonempty directory" } });
+    expect(got.stderr).toContain("flow 'greet'");
     spyRestore();
     const got2 = capture();
     await runCli(['greet', '--flows', 'a', '--flows', 'b', '--json']);
@@ -206,7 +210,8 @@ describe('runCli usage errors', () => {
   it('rejects unsupported options', async () => {
     const got = capture();
     await runCli(['greet', '--write', '--json']);
-    expect(JSON.parse(got.stdout)).toEqual({ flow: 'greet', ok: false, error: { step: null, message: "unknown option '--write'" } });
+    expect(JSON.parse(got.stdout)).toEqual({ flow: 'greet', ok: false, error: { step: null, message: "flow 'greet': unknown option '--write'" } });
+    expect(got.stderr).toContain("flow 'greet'");
     expect(runner.runFlow).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
@@ -214,7 +219,8 @@ describe('runCli usage errors', () => {
   it('rejects extra positionals', async () => {
     const got = capture();
     await runCli(['one', 'two', '--json']);
-    expect(JSON.parse(got.stdout)).toEqual({ flow: 'one', ok: false, error: { step: null, message: "unexpected extra argument 'two'" } });
+    expect(JSON.parse(got.stdout)).toEqual({ flow: 'one', ok: false, error: { step: null, message: "flow 'one': unexpected extra argument 'two'" } });
+    expect(got.stderr).toContain("flow 'one'");
     expect(runner.runFlow).not.toHaveBeenCalled();
   });
 

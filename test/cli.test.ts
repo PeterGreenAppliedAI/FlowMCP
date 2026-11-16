@@ -426,9 +426,9 @@ describe('flowmcp run directory precedence', () => {
 describe('flowmcp run usage failures', () => {
   it('missing option values, unknown options and extra positionals exit 1 with --json honored', async () => {
     const cases: Array<{ argv: string[]; flow: string | null; message: string }> = [
-      { argv: ['run', 'greet', '--flows', '--json'], flow: 'greet', message: "option '--flows' requires a value" },
-      { argv: ['run', 'greet', '--nope', '--json'], flow: 'greet', message: "unknown option '--nope'" },
-      { argv: ['run', 'a', 'b', '--json'], flow: 'a', message: "unexpected extra argument 'b'" },
+      { argv: ['run', 'greet', '--flows', '--json'], flow: 'greet', message: "flow 'greet': option '--flows' requires a value" },
+      { argv: ['run', 'greet', '--nope', '--json'], flow: 'greet', message: "flow 'greet': unknown option '--nope'" },
+      { argv: ['run', 'a', 'b', '--json'], flow: 'a', message: "flow 'a': unexpected extra argument 'b'" },
       { argv: ['run', '--json'], flow: null, message: 'missing flow name' },
     ];
     for (const { argv, flow, message } of cases) {
