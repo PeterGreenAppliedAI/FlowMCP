@@ -22,8 +22,9 @@
 //   - --json failure: stdout gets ONE compact object plus '\n':
 //                    {"flow":"<requested>"|null,"ok":false,
 //                     "error":{"step":"<step id>"|null,"message":"<diagnosis>"}}
-//                    The diagnosis still goes to stderr too. A usage failure
-//                    before a flow is known has flow: null.
+//                    The diagnosis still goes to stderr too. flow is the
+//                    requested name whenever one was given, and null only
+//                    when it is missing.
 //   - --help:        text usage on stdout, exit 0, no flows loaded or run —
 //                    even with --json.
 //   - every unsuccessful invocation exits 1; completion/help exit 0.
@@ -66,12 +67,14 @@ interface ParsedRun {
 // Parse the arguments after `flowmcp run`. Option values are never taken from
 // the next token: an option followed by another flag (or by nothing) is a
 // missing-value error, so a misplaced `--json` can never be read as a
-// directory. `--` ends option parsing; after it every token is positional.
+// directory. Only the requested options exist; anything else starting with
+// '-' is an unsupported option.
 //
-// A usage error is recorded but parsing continues, so --json given anywhere
-// before `--` is still honored (the JSON envelope is a usage-failure output
-// too). The first problem in argv order wins; later tokens are only scanned
-// for --json/--allow-inactive and positionals.
+// A usage error is recorded but parsing continues, so --json given anywhere is
+// still honored (the JSON envelope is a usage-failure output too). The first
+// problem in argv order wins; later tokens are only scanned for
+// --json/--allow-inactive and positionals. The first positional is kept on a
+// usage-error return too, so the envelope can name the requested flow.
 function parseRunArgs(argv: string[]): ParsedRun {
   const parsed: ParsedRun = {
     inputPairs: [],
@@ -81,27 +84,22 @@ function parseRunArgs(argv: string[]): ParsedRun {
   };
   const positionals: string[] = [];
   let dir: string | undefined;
-  let options = true;
   const fail = (message: string): void => {
     if (parsed.usageError === undefined) parsed.usageError = message;
   };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
-    if (options && arg === '--') {
-      options = false;
-      continue;
-    }
-    if (options && arg === '--help') {
+    if (arg === '--help') {
       parsed.help = true;
       continue;
     }
-    if (options && (arg === '--json' || arg === '--allow-inactive')) {
+    if (arg === '--json' || arg === '--allow-inactive') {
       if (arg === '--json') parsed.json = true;
       else parsed.allowInactive = true;
       continue;
     }
-    if (options && (arg === '--flows' || arg === '--input')) {
+    if (arg === '--flows' || arg === '--input') {
       const label = arg === '--flows' ? '--flows' : '--input';
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('-')) {
@@ -118,7 +116,7 @@ function parseRunArgs(argv: string[]): ParsedRun {
       }
       continue;
     }
-    if (options && arg.startsWith('-') && arg !== '-') {
+    if (arg.startsWith('-') && arg !== '-') {
       fail(`unknown option '${arg}'`);
       continue;
     }
@@ -126,11 +124,12 @@ function parseRunArgs(argv: string[]): ParsedRun {
   }
 
   if (parsed.help) return parsed;
+  // Keep the requested flow even when a usage error is also present.
+  if (positionals.length > 0) parsed.flow = positionals[0];
   if (positionals.length === 0) fail('missing flow name');
   else if (positionals.length > 1) fail(`unexpected extra argument '${positionals[1]}'`);
   if (parsed.usageError !== undefined) return parsed;
 
-  parsed.flow = positionals[0];
   if (dir !== undefined) parsed.dir = dir;
   return parsed;
 }

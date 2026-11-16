@@ -323,28 +323,35 @@ describe('flowmcp run end to end', () => {
   });
 
   it('runs a config-relative downstream MCP path from another cwd', async () => {
-    // servers.json5 names a relative script path; the flow calls it. The run
-    // must resolve the script against the flows dir, not the process cwd, and
-    // complete with the child's echoed structured content.
-    const dir = await makeDir({
-      // The child's cwd is the flows dir (config-relative paths resolve
-      // there), so tsx is named by its absolute loader path; the target script
-      // is absolute too. This proves the config-relative cwd, not process cwd.
-      'servers.json5': `{ mock: { command: 'node', args: ['--import', '${tsxLoader}', '${join(projectRoot, 'test/fixtures/mock-mcp.ts')}'] } }`,
-      'a.flow.json5': JSON.stringify({
+    // servers.json5 names the downstream script by a path RELATIVE to the
+    // flows dir; the flow calls it. Run from an unrelated cwd: success proves
+    // the child was spawned with the flows dir as its cwd and resolved the
+    // script against it, not against the process cwd (where it does not exist).
+    const dir = await makeDir({});
+    await mkdir(join(dir, 'bin'), { recursive: true });
+    await writeFile(join(dir, 'bin', 'mock-mcp.ts'), await readFile(join(projectRoot, 'test/fixtures/mock-mcp.ts')));
+    await writeFile(
+      join(dir, 'servers.json5'),
+      `{ mock: { command: 'node', args: ['--import', '${tsxLoader}', './bin/mock-mcp.ts'] } }`,
+    );
+    await writeFile(
+      join(dir, 'a.flow.json5'),
+      JSON.stringify({
         name: 'echoer',
         description: 'WHEN TO USE: echo through a downstream server.',
         input: { msg: { type: 'string', description: 'msg', required: true } },
         steps: [{ id: 'c', kind: 'mcp_call', server: 'mock', tool: 'echo', args: { msg: '{{input.msg}}' } }],
         output: 'echo={{steps.c.echoed.msg}}',
       }),
-    });
+    );
     const otherCwd = await makeDir({});
     const res = await runCli(['run', 'echoer', '--flows', dir, '--input', 'msg=hello', '--json'], {
       cwd: otherCwd,
     });
     expect(res.code).toBe(0);
     expect(JSON.parse(res.stdout)).toEqual({ flow: 'echoer', ok: true, output: 'echo=hello' });
+    // The pool found the config-relative path (no stale-path warning).
+    expect(res.stderr).not.toContain('does not exist relative to');
   });
 });
 
@@ -418,16 +425,16 @@ describe('flowmcp run directory precedence', () => {
 // ---------------------------------------------------------------------------
 describe('flowmcp run usage failures', () => {
   it('missing option values, unknown options and extra positionals exit 1 with --json honored', async () => {
-    const cases: Array<{ argv: string[]; message: string }> = [
-      { argv: ['run', 'greet', '--flows', '--json'], message: "option '--flows' requires a value" },
-      { argv: ['run', 'greet', '--nope', '--json'], message: "unknown option '--nope'" },
-      { argv: ['run', 'a', 'b', '--json'], message: "unexpected extra argument 'b'" },
-      { argv: ['run', '--json'], message: 'missing flow name' },
+    const cases: Array<{ argv: string[]; flow: string | null; message: string }> = [
+      { argv: ['run', 'greet', '--flows', '--json'], flow: 'greet', message: "option '--flows' requires a value" },
+      { argv: ['run', 'greet', '--nope', '--json'], flow: 'greet', message: "unknown option '--nope'" },
+      { argv: ['run', 'a', 'b', '--json'], flow: 'a', message: "unexpected extra argument 'b'" },
+      { argv: ['run', '--json'], flow: null, message: 'missing flow name' },
     ];
-    for (const { argv, message } of cases) {
+    for (const { argv, flow, message } of cases) {
       const res = await runCli(argv);
       expect(res.code).toBe(1);
-      expect(JSON.parse(res.stdout)).toEqual({ flow: null, ok: false, error: { step: null, message } });
+      expect(JSON.parse(res.stdout)).toEqual({ flow, ok: false, error: { step: null, message } });
     }
   });
 

@@ -152,7 +152,8 @@ describe('runCli --json mode', () => {
       const got = capture();
       await runCli(argv);
       const parsed = JSON.parse(got.stdout) as Record<string, unknown>;
-      expect(parsed.flow).toBeNull();
+      // A supplied flow is preserved in the envelope; only a missing flow is null.
+      expect(parsed.flow).toBe(argv[0] === 'greet' ? 'greet' : null);
       expect((parsed.error as { message: string }).message).toContain("unknown option '--bogus'");
       expect(process.exitCode).toBe(1);
       spyRestore();
@@ -179,7 +180,7 @@ describe('runCli usage errors', () => {
       if (argv.includes('--json')) {
         const option = argv.includes('--flows') ? '--flows' : '--input';
         expect(got.stdout).toBe(
-          `${JSON.stringify({ flow: null, ok: false, error: { step: null, message: `option '${option}' requires a value` } })}\n`,
+          `${JSON.stringify({ flow: argv[0] === 'greet' ? 'greet' : null, ok: false, error: { step: null, message: `option '${option}' requires a value` } })}\n`,
         );
       } else {
         expect(got.stdout).toBe('');
@@ -193,10 +194,11 @@ describe('runCli usage errors', () => {
   it('rejects an empty --flows directory and a repeated --flows', async () => {
     const got = capture();
     await runCli(['greet', '--flows', '', '--json']);
-    expect(JSON.parse(got.stdout)).toMatchObject({ flow: null, ok: false });
+    expect(JSON.parse(got.stdout)).toEqual({ flow: 'greet', ok: false, error: { step: null, message: "option '--flows' requires a nonempty directory" } });
     spyRestore();
     const got2 = capture();
     await runCli(['greet', '--flows', 'a', '--flows', 'b', '--json']);
+    expect((JSON.parse(got2.stdout) as { flow: unknown; error: { message: string } }).flow).toBe('greet');
     expect((JSON.parse(got2.stdout) as { error: { message: string } }).error.message).toContain('more than once');
     expect(runner.runFlow).not.toHaveBeenCalled();
   });
@@ -204,7 +206,7 @@ describe('runCli usage errors', () => {
   it('rejects unsupported options', async () => {
     const got = capture();
     await runCli(['greet', '--write', '--json']);
-    expect((JSON.parse(got.stdout) as { error: { message: string } }).error.message).toBe("unknown option '--write'");
+    expect(JSON.parse(got.stdout)).toEqual({ flow: 'greet', ok: false, error: { step: null, message: "unknown option '--write'" } });
     expect(runner.runFlow).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
@@ -212,27 +214,20 @@ describe('runCli usage errors', () => {
   it('rejects extra positionals', async () => {
     const got = capture();
     await runCli(['one', 'two', '--json']);
-    expect((JSON.parse(got.stdout) as { error: { message: string } }).error.message).toBe("unexpected extra argument 'two'");
+    expect(JSON.parse(got.stdout)).toEqual({ flow: 'one', ok: false, error: { step: null, message: "unexpected extra argument 'two'" } });
     expect(runner.runFlow).not.toHaveBeenCalled();
   });
 
-  it('treats "--" as end of options so flag-looking tokens are positionals', async () => {
-    // After "--", "--flows" is the flow name and "--json" is an extra
-    // positional: exactly one flow and no options.
+  it('treats "--" as an unsupported option rather than end-of-options', async () => {
+    // Only the requested options exist: '--' is not one, and it does not make
+    // later flag-looking tokens positionals.
     const got = capture();
     await runCli(['--', '--flows', '--json']);
-    expect(got.stdout).toBe('');
-    expect(got.stderr).toContain("unexpected extra argument '--json'");
+    expect(got.stdout).toBe(
+      `${JSON.stringify({ flow: null, ok: false, error: { step: null, message: "unknown option '--'" } })}\n`,
+    );
     expect(runner.runFlow).not.toHaveBeenCalled();
-    spyRestore();
-  });
-
-  it('accepts a flag-looking flow name after "--"', async () => {
-    runner.runFlow.mockResolvedValue({ text: 'ok' });
-    const got = capture();
-    await runCli(['--', '--flows']);
-    expect(got.stdout).toBe('ok\n');
-    expect(runner.runFlow).toHaveBeenCalledWith(expect.objectContaining({ flow: '--flows' }));
+    expect(process.exitCode).toBe(1);
   });
 });
 
